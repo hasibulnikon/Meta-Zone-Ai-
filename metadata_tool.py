@@ -91,6 +91,7 @@ AI_PROVIDERS = {
     "Gemini": {
         "models": [
             "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
             "gemini-2.0-flash",
             "gemini-1.5-flash",
             "gemini-1.5-pro",
@@ -100,10 +101,14 @@ AI_PROVIDERS = {
     },
     "OpenRouter": {
         "models": [
-            "google/gemini-2.0-flash-exp:free",
+            "qwen/qwen2.5-vl-72b-instruct:free",
+            "qwen/qwen2.5-vl-32b-instruct:free",
+            "meta-llama/llama-4-maverick:free",
             "meta-llama/llama-4-scout:free",
-            "mistralai/mistral-small-3.2-24b-instruct:free",
+            "meta-llama/llama-3.2-11b-vision-instruct:free",
             "google/gemma-3-27b-it:free",
+            "mistralai/mistral-small-3.1-24b-instruct:free",
+            "moonshotai/kimi-vl-a3b-thinking:free",
         ],
         "key_url": "https://openrouter.ai/keys",
         "key_hint": "Get free key → openrouter.ai",
@@ -118,9 +123,9 @@ AI_PROVIDERS = {
     },
     "Groq": {
         "models": [
-            "llama-4-scout-17b-16e-instruct",
-            "llama-4-maverick-17b-128e-instruct",
             "meta-llama/llama-4-scout-17b-16e-instruct",
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
+            "llama-4-scout-17b-16e-instruct",
         ],
         "key_url": "https://console.groq.com/keys",
         "key_hint": "Get free key → console.groq.com",
@@ -128,6 +133,7 @@ AI_PROVIDERS = {
     "Mistral": {
         "models": [
             "pixtral-12b-2409",
+            "pixtral-large-2411",
             "mistral-large-latest",
         ],
         "key_url": "https://console.mistral.ai/api-keys/",
@@ -193,94 +199,101 @@ def img_to_b64(path):
     mime = mime_map.get(ext, 'image/jpeg')
     return base64.b64encode(data).decode(), mime
 
+def _http_post(url, body_dict, headers, timeout=60):
+    """POST helper that raises a readable error with the response body on failure."""
+    body = json.dumps(body_dict).encode()
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode(errors='replace')
+            try:
+                parsed = json.loads(err_body)
+                # Extract the most useful message
+                msg = (parsed.get("error", {}).get("message")
+                    or parsed.get("message")
+                    or err_body[:200])
+            except Exception:
+                msg = err_body[:200]
+        except Exception:
+            msg = str(e)
+        raise RuntimeError(f"HTTP {e.code}: {msg}")
+
 def call_gemini(api_key, model, image_path, prompt):
     b64, mime = img_to_b64(image_path)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    body = json.dumps({
+    resp = _http_post(url, {
         "contents": [{"parts": [
             {"inline_data": {"mime_type": mime, "data": b64}},
             {"text": prompt}
         ]}],
         "generationConfig": {"temperature": 0.4, "maxOutputTokens": 600}
-    }).encode()
-    req = urllib.request.Request(url, data=body,
-        headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        resp = json.loads(r.read())
+    }, {"Content-Type": "application/json"})
     return resp["candidates"][0]["content"]["parts"][0]["text"]
 
 def call_openrouter(api_key, model, image_path, prompt):
     b64, mime = img_to_b64(image_path)
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    body = json.dumps({
+    resp = _http_post("https://openrouter.ai/api/v1/chat/completions", {
         "model": model,
         "max_tokens": 600,
         "messages": [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
             {"type": "text", "text": prompt}
         ]}]
-    }).encode()
-    req = urllib.request.Request(url, data=body,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {api_key}",
-                 "HTTP-Referer": "https://metazone.app"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        resp = json.loads(r.read())
+    }, {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "HTTP-Referer": "https://metazone.app",
+        "X-Title": "Meta Zone"
+    })
     return resp["choices"][0]["message"]["content"]
 
 def call_claude(api_key, model, image_path, prompt):
     b64, mime = img_to_b64(image_path)
-    url = "https://api.anthropic.com/v1/messages"
-    body = json.dumps({
+    resp = _http_post("https://api.anthropic.com/v1/messages", {
         "model": model,
         "max_tokens": 600,
         "messages": [{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}},
             {"type": "text", "text": prompt}
         ]}]
-    }).encode()
-    req = urllib.request.Request(url, data=body,
-        headers={"Content-Type": "application/json",
-                 "x-api-key": api_key,
-                 "anthropic-version": "2023-06-01"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        resp = json.loads(r.read())
+    }, {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01"
+    })
     return resp["content"][0]["text"]
 
 def call_groq(api_key, model, image_path, prompt):
     b64, mime = img_to_b64(image_path)
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    body = json.dumps({
+    resp = _http_post("https://api.groq.com/openai/v1/chat/completions", {
         "model": model,
         "max_tokens": 600,
         "messages": [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
             {"type": "text", "text": prompt}
         ]}]
-    }).encode()
-    req = urllib.request.Request(url, data=body,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {api_key}"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        resp = json.loads(r.read())
+    }, {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    })
     return resp["choices"][0]["message"]["content"]
 
 def call_mistral(api_key, model, image_path, prompt):
     b64, mime = img_to_b64(image_path)
-    url = "https://api.mistral.ai/v1/chat/completions"
-    body = json.dumps({
+    resp = _http_post("https://api.mistral.ai/v1/chat/completions", {
         "model": model,
         "max_tokens": 600,
         "messages": [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
             {"type": "text", "text": prompt}
         ]}]
-    }).encode()
-    req = urllib.request.Request(url, data=body,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {api_key}"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        resp = json.loads(r.read())
+    }, {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    })
     return resp["choices"][0]["message"]["content"]
 
 def call_ai(provider, api_key, model, image_path, prompt):
