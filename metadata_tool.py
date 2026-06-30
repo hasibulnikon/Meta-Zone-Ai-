@@ -1494,7 +1494,7 @@ class App(DnDCTk):
 
     def _refresh_api_lbl(self):
         seq=get_active_keys(self.prefs); total=len(seq)
-        providers=list(dict.fromkeys(p for p,_,_ in seq))
+        providers=list(dict.fromkeys(p for p,_,_,_ in seq))
         if total:
             self._api_lbl.configure(
                 text=f"✓ {total} key{'s' if total!=1 else ''} · {len(providers)} provider{'s' if len(providers)!=1 else ''}",
