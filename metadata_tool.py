@@ -4,6 +4,16 @@ import csv, subprocess, os, sys, threading, datetime, json, base64, socket, queu
 import urllib.request, urllib.error
 from PIL import Image
 
+# Drag-and-drop support — tkinterdnd2 must wrap the root window itself.
+# Without this, drop_target_register() on child widgets silently no-ops,
+# which is why drag-and-drop never worked in earlier builds.
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    DND_AVAILABLE = True
+except ImportError:
+    DND_AVAILABLE = False
+    DND_FILES = None
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
@@ -335,47 +345,69 @@ def get_active_keys(prefs):
     for provider,cfg in AI_PROVIDERS.items():
         keys=prefs.get("ai_keys",{}).get(provider,[])
         model=prefs.get("ai_models",{}).get(provider, cfg["models"][0][1])
-        for k in keys:
-            if k.get("active") and k.get("key"):
-                seq.append((provider,k["key"],model))
+        active_keys=[k for k in keys if k.get("active") and k.get("key")]
+        for i,k in enumerate(active_keys,1):
+            seq.append((provider,k["key"],model,i))
     return seq
 
 def call_with_failover(path,prompt,prefs,status_cb=None):
     seq=get_active_keys(prefs)
     if not seq: raise RuntimeError("No active API keys. Open 'API Configuration'.")
     last_err=""
-    for provider,key,model in seq:
+    for provider,key,model,key_idx in seq:
         try:
             if status_cb: status_cb(f"Trying {provider} · {model_label(provider,model)}…")
             raw=CALLERS[provider](key,model,path,prompt)
-            return raw,provider
+            return raw,provider,model,key_idx
         except Exception as e:
             last_err=f"{provider}: {str(e)[:120]}"
     raise RuntimeError(f"All keys failed. Last: {last_err}")
 
-def build_meta_prompt(title_c,desc_c,kw_n,content_type,custom_prompt=""):
+def build_meta_prompt(title_c,desc_c,kw_n,content_type,custom_prompt="",single_kw=False):
     suffix=CONTENT_SUFFIXES.get(content_type,"")
-    extra=""
-    if suffix: extra=f"\n- Append this phrase naturally: \"{suffix}\""
-    if custom_prompt.strip(): extra+=f"\n- Additional instruction: {custom_prompt.strip()}"
+    directives=[]
+    if suffix:
+        directives.append(f'You MUST naturally work this phrase into the description or title: "{suffix}".')
+    if single_kw:
+        directives.append("Every keyword MUST be a single word only — no multi-word phrases, no spaces inside a keyword.")
+    if custom_prompt.strip():
+        directives.append(
+            f"MANDATORY COMMAND — this overrides your default judgement and MUST be reflected in the "
+            f"title, description, AND keywords: \"{custom_prompt.strip()}\". "
+            f"Re-read your draft before answering and rewrite anything that does not follow this command."
+        )
+    directive_block = ("\n\nMANDATORY INSTRUCTIONS (do not skip any of these):\n" +
+        "\n".join(f"- {d}" for d in directives)) if directives else ""
+
     return (
         f"You are a professional stock image metadata writer.\n"
         f"Analyze this image and respond ONLY in this exact 3-line format:\n\n"
-        f"TITLE: <descriptive title, max {title_c} characters>\n"
-        f"DESCRIPTION: <detailed scene description, max {desc_c} characters>\n"
-        f"KEYWORDS: <exactly {kw_n} comma-separated keywords, most specific first>\n\n"
-        f"Rules:\n"
-        f"- Output ONLY the 3 lines. Nothing else.\n"
-        f"- Exactly {kw_n} keywords. No duplicates, no brand names.\n"
-        f"- Cover: subject, action, setting, mood, color, style, use-case.{extra}"
+        f"TITLE: <descriptive title>\n"
+        f"DESCRIPTION: <detailed scene description>\n"
+        f"KEYWORDS: <comma-separated keywords, most specific first>\n\n"
+        f"Hard limits — you MUST satisfy ALL of these exactly, not approximately:\n"
+        f"- TITLE: between {max(title_c-15,10)} and {title_c} characters. Pad with relevant descriptive "
+        f"detail if your first draft is shorter — do not stop early.\n"
+        f"- DESCRIPTION: between {max(desc_c-25,15)} and {desc_c} characters. Add scene detail, mood, "
+        f"and use-case context if needed to reach this length.\n"
+        f"- KEYWORDS: exactly {kw_n} keywords, no more, no fewer. No duplicates, no brand names.\n"
+        f"- Cover in the keywords: subject, action, setting, mood, color, style, demographic, use-case.\n"
+        f"- Output ONLY the 3 lines above. No preamble, no markdown, no explanation.{directive_block}"
     )
+
 
 def build_prompt_prompt(max_words,styles,content_type,custom_prompt=""):
     suffix=CONTENT_SUFFIXES.get(content_type,"")
     style_str=", ".join(styles) if styles else "realistic photography"
-    extra=""
-    if suffix: extra=f"\n- End the prompt with: \"{suffix}\""
-    if custom_prompt.strip(): extra+=f"\n- Additional instruction: {custom_prompt.strip()}"
+    directives=[]
+    if suffix:
+        directives.append(f'End the prompt with: "{suffix}".')
+    if custom_prompt.strip():
+        directives.append(
+            f"MANDATORY COMMAND — this overrides your default judgement: \"{custom_prompt.strip()}\". "
+            f"Re-read your draft and rewrite anything not following this command."
+        )
+    directive_block = ("\n\nMANDATORY INSTRUCTIONS:\n" + "\n".join(f"- {d}" for d in directives)) if directives else ""
     return (
         f"You are an expert AI image generation prompt writer.\n"
         f"Analyze this image and write a detailed image generation prompt.\n"
@@ -384,8 +416,9 @@ def build_prompt_prompt(max_words,styles,content_type,custom_prompt=""):
         f"- Maximum {max_words} words.\n"
         f"- Style: {style_str}.\n"
         f"- Include: subject details, lighting, color palette, composition, mood, camera angle.\n"
-        f"- Write as a flowing, comma-separated description (professional prompt style).{extra}"
+        f"- Write as a flowing, comma-separated description (professional prompt style).{directive_block}"
     )
+
 
 def parse_meta(text):
     title=desc=kw=""
@@ -442,7 +475,7 @@ class APIManagerWindow(ctk.CTkToplevel):
         self.prefs=prefs; self.on_close=on_close
         self._cur=list(AI_PROVIDERS.keys())[0]
         self._validate_cache = {}   # key -> (ok,msg)
-        self._build(); self._center(740,580)
+        self._build(); self._center(840,600)
         self.protocol("WM_DELETE_WINDOW",self._done)
 
     def _center(self,w,h):
@@ -478,10 +511,11 @@ class APIManagerWindow(ctk.CTkToplevel):
         body.grid(row=2,column=0,sticky="nsew")
         body.grid_columnconfigure(0,weight=0); body.grid_columnconfigure(1,weight=1)
         body.grid_rowconfigure(0,weight=1)
-        self._lp=ctk.CTkFrame(body,fg_color=META_BG3,corner_radius=0,width=310)
+        self._lp=ctk.CTkFrame(body,fg_color=META_BG3,corner_radius=0,width=400)
         self._lp.grid(row=0,column=0,sticky="nsew"); self._lp.grid_propagate(False)
-        self._rp=ctk.CTkFrame(body,fg_color=META_BG2,corner_radius=0)
+        self._rp=ctk.CTkFrame(body,fg_color=META_BG2,corner_radius=0,width=300)
         self._rp.grid(row=0,column=1,sticky="nsew",padx=(1,0))
+        self._rp.grid_propagate(False)
         self._rp.grid_columnconfigure(0,weight=1); self._rp.grid_rowconfigure(1,weight=1)
         ftr=ctk.CTkFrame(self,fg_color=META_BG,corner_radius=0,height=50)
         ftr.grid(row=3,column=0,sticky="ew"); ftr.grid_propagate(False)
@@ -585,8 +619,8 @@ class APIManagerWindow(ctk.CTkToplevel):
     def _render_key_card(self,parent,provider,idx,k):
         is_active=k.get("active",False)
         kv=k.get("key","")
-        key_short=kv[:10]+"..." if len(kv)>10 else kv
-        key_id="ID: "+kv[-4:] if len(kv)>=4 else ""
+        key_short="..."+kv[-10:] if len(kv)>10 else kv
+        key_id=""
         bdr_col=META_ACC if is_active else META_BDR
         card=ctk.CTkFrame(parent,fg_color=META_ACC3 if is_active else META_BG3,
             corner_radius=10,border_width=1,border_color=bdr_col)
@@ -653,7 +687,8 @@ class APIManagerWindow(ctk.CTkToplevel):
         ch=lf.winfo_children()
         if ch:
             cur=ch[0].cget("text")
-            ch[0].configure(text=kv if "..." in cur else (kv[:10]+"..." if len(kv)>10 else kv))
+            short="..."+kv[-10:] if len(kv)>10 else kv
+            ch[0].configure(text=kv if cur==short else short)
 
     def _copy(self,kv): self.clipboard_clear(); self.clipboard_append(kv)
 
@@ -725,11 +760,11 @@ class MetaCard(ctk.CTkFrame):
         self._thumb=ctk.CTkLabel(tf,text="🖼",font=ctk.CTkFont("Segoe UI",20),
             fg_color=META_BG,text_color=TXT3,corner_radius=6,width=138,height=80)
         self._thumb.grid(row=0,column=0)
-        del_btn=ctk.CTkButton(tf,text="✕",width=22,height=22,
-            font=ctk.CTkFont("Segoe UI",9,"bold"),
-            fg_color=RED,hover_color="#c04040",text_color="white",corner_radius=11,
+        del_btn=ctk.CTkButton(tf,text="✕",width=16,height=16,
+            font=ctk.CTkFont("Segoe UI",7,"bold"),
+            fg_color=RED,hover_color="#c04040",text_color="white",corner_radius=8,
             command=self.on_delete)
-        del_btn.place(relx=1.0,rely=0.0,anchor="ne",x=-1,y=1)
+        del_btn.place(relx=1.0,rely=0.0,anchor="ne",x=0,y=0)
 
         fname=os.path.basename(self.path)
         fname_short=fname if len(fname)<=20 else fname[:18]+"…"
@@ -752,7 +787,12 @@ class MetaCard(ctk.CTkFrame):
         self._status_lbl=ctk.CTkLabel(lp,text="○  WAITING",
             font=ctk.CTkFont("Segoe UI",9,"bold"),
             fg_color=META_BG,text_color=TXT3,corner_radius=20,height=24)
-        self._status_lbl.grid(row=4,column=0,padx=6,pady=(0,6),sticky="ew")
+        self._status_lbl.grid(row=4,column=0,padx=6,pady=(0,2),sticky="ew")
+
+        self._model_lbl=ctk.CTkLabel(lp,text="",
+            font=ctk.CTkFont("Segoe UI",8),
+            text_color=TXT3,fg_color=META_BG3,wraplength=136)
+        self._model_lbl.grid(row=5,column=0,padx=6,pady=(0,6),sticky="ew")
 
         rp=ctk.CTkFrame(self,fg_color=META_CARD,corner_radius=0)
         rp.grid(row=0,column=1,sticky="nsew",padx=(6,8),pady=8)
@@ -772,7 +812,7 @@ class MetaCard(ctk.CTkFrame):
         hdr.grid_columnconfigure(1,weight=1)
         ctk.CTkLabel(hdr,text=label,font=ctk.CTkFont("Segoe UI",10,"bold"),
             text_color=TXT3,fg_color=META_CARD).grid(row=0,column=0,sticky="w")
-        cnt_lbl=ctk.CTkLabel(hdr,text="0 Chars · 0 Words",
+        cnt_lbl=ctk.CTkLabel(hdr,text="0 Keywords" if is_kw else "0 Chars · 0 Words",
             font=ctk.CTkFont("Segoe UI",9),text_color=TXT3,fg_color=META_CARD)
         cnt_lbl.grid(row=0,column=1,sticky="e")
         ctk.CTkButton(hdr,text="Copy",width=46,height=20,
@@ -789,9 +829,13 @@ class MetaCard(ctk.CTkFrame):
         def _recount():
             c=box.get("1.0","end-1c")
             var.set(c.strip())
-            chars=len(c.strip())
-            words=len(c.split()) if c.strip() else 0
-            cnt_lbl.configure(text=f"{chars} Chars · {words} Words")
+            if is_kw:
+                kw_count=len([k for k in c.split(",") if k.strip()]) if c.strip() else 0
+                cnt_lbl.configure(text=f"{kw_count} Keywords")
+            else:
+                chars=len(c.strip())
+                words=len(c.split()) if c.strip() else 0
+                cnt_lbl.configure(text=f"{chars} Chars · {words} Words")
 
         # Bind to every key release AND a periodic poll fallback (covers paste, etc.)
         box.bind("<KeyRelease>", lambda e: _recount())
@@ -831,6 +875,7 @@ class MetaCard(ctk.CTkFrame):
         for b in [self._desc_box,self._kw_box]:
             b.configure(state="normal"); b.delete("1.0","end")
             b._recount()
+        self.clear_model_used()
 
     def set_result(self,title,desc,kw):
         self._title_box.configure(state="normal")
@@ -840,6 +885,16 @@ class MetaCard(ctk.CTkFrame):
             box.configure(state="normal"); box.delete("1.0","end"); box.insert("1.0",val)
             var.set(val)
             box._recount()
+
+    def set_model_used(self, provider, model_id, key_index=None):
+        label = model_label(provider, model_id)
+        idx_str = f" ({key_index})" if key_index else ""
+        self._model_lbl.configure(text=f"⚙ {provider} · {label}{idx_str}")
+        self._model_used = f"{provider} · {label}{idx_str}"
+
+    def clear_model_used(self):
+        self._model_lbl.configure(text="")
+        self._model_used = ""
 
     def clear(self):
         self._title_box.configure(state="normal")
@@ -851,7 +906,8 @@ class MetaCard(ctk.CTkFrame):
         return {"Filename":os.path.basename(self.path),
                 "Title":self._title_var.get(),
                 "Description":self._desc_var.get(),
-                "Keywords":self._kw_var.get()}
+                "Keywords":self._kw_var.get(),
+                "Model":getattr(self,"_model_used","")}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -879,11 +935,11 @@ class PromptCard(ctk.CTkFrame):
         self._thumb=ctk.CTkLabel(tf,text="🖼",font=ctk.CTkFont("Segoe UI",20),
             fg_color=META_BG,text_color=TXT3,corner_radius=6,width=138,height=80)
         self._thumb.grid(row=0,column=0)
-        del_btn=ctk.CTkButton(tf,text="✕",width=22,height=22,
-            font=ctk.CTkFont("Segoe UI",9,"bold"),
-            fg_color=RED,hover_color="#c04040",text_color="white",corner_radius=11,
+        del_btn=ctk.CTkButton(tf,text="✕",width=16,height=16,
+            font=ctk.CTkFont("Segoe UI",7,"bold"),
+            fg_color=RED,hover_color="#c04040",text_color="white",corner_radius=8,
             command=self.on_delete)
-        del_btn.place(relx=1.0,rely=0.0,anchor="ne",x=-1,y=1)
+        del_btn.place(relx=1.0,rely=0.0,anchor="ne",x=0,y=0)
         fname=os.path.basename(self.path)
         fname_short=fname if len(fname)<=20 else fname[:18]+"…"
         ctk.CTkLabel(lp,text=fname_short,font=ctk.CTkFont("Segoe UI",9),
@@ -901,7 +957,12 @@ class PromptCard(ctk.CTkFrame):
         self._status_lbl=ctk.CTkLabel(lp,text="○  WAITING",
             font=ctk.CTkFont("Segoe UI",9,"bold"),
             fg_color=META_BG,text_color=TXT3,corner_radius=20,height=24)
-        self._status_lbl.grid(row=4,column=0,padx=6,pady=(0,6),sticky="ew")
+        self._status_lbl.grid(row=4,column=0,padx=6,pady=(0,2),sticky="ew")
+
+        self._model_lbl=ctk.CTkLabel(lp,text="",
+            font=ctk.CTkFont("Segoe UI",8),
+            text_color=TXT3,fg_color=META_BG3,wraplength=136)
+        self._model_lbl.grid(row=5,column=0,padx=6,pady=(0,6),sticky="ew")
 
         rp=ctk.CTkFrame(self,fg_color=META_CARD,corner_radius=0)
         rp.grid(row=0,column=1,sticky="nsew",padx=(6,8),pady=8)
@@ -970,6 +1031,7 @@ class PromptCard(ctk.CTkFrame):
         self._prompt_box.configure(state="normal"); self._prompt_box.delete("1.0","end")
         self._prompt_box.insert("1.0","⟳ AI is analyzing…")
         self._prompt_box.configure(state="disabled")
+        self.clear_model_used()
 
     def set_result(self,prompt):
         self._prompt_box.configure(state="normal")
@@ -978,12 +1040,23 @@ class PromptCard(ctk.CTkFrame):
         self._prompt_var.set(prompt)
         self._prompt_box._recount()
 
+    def set_model_used(self, provider, model_id, key_index=None):
+        label = model_label(provider, model_id)
+        idx_str = f" ({key_index})" if key_index else ""
+        self._model_lbl.configure(text=f"⚙ {provider} · {label}{idx_str}")
+        self._model_used = f"{provider} · {label}{idx_str}"
+
+    def clear_model_used(self):
+        self._model_lbl.configure(text="")
+        self._model_used = ""
+
     def clear(self):
         self._prompt_box.configure(state="normal"); self._prompt_box.delete("1.0","end")
         self._prompt_box._recount()
 
     def get_result(self):
-        return {"Filename":os.path.basename(self.path),"Prompt":self._prompt_var.get()}
+        return {"Filename":os.path.basename(self.path),"Prompt":self._prompt_var.get(),
+                "Model":getattr(self,"_model_used","")}
 
 # ══════════════════════════════════════════════════════════════════════
 #  IMPORT PROGRESS DIALOG
@@ -1030,7 +1103,20 @@ class ImportProgressDialog(ctk.CTkToplevel):
 # ══════════════════════════════════════════════════════════════════════
 #  MAIN APP
 # ══════════════════════════════════════════════════════════════════════
-class App(ctk.CTk):
+if DND_AVAILABLE:
+    class DnDCTk(ctk.CTk, TkinterDnD.DnDWrapper):
+        """CTk root window with tkinterdnd2 drag-and-drop support mixed in.
+        This is required because plain ctk.CTk() / tkinter.Tk() does not
+        initialize the Tcl 'tkdnd' package — drop_target_register() on any
+        child widget will silently do nothing without this."""
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.TkdndVersion = TkinterDnD._require(self)
+else:
+    DnDCTk = ctk.CTk
+
+
+class App(DnDCTk):
     def __init__(self):
         super().__init__()
         self.title("Meta Zone"); self.configure(fg_color=META_BG)
@@ -1056,6 +1142,7 @@ class App(ctk.CTk):
         self.ai_words_var=StringVar(value=str(self.prefs.get("prompt_words",60)))
         self.ai_content_var=StringVar(value=self.prefs.get("content_type","Auto Detect"))
         self.ai_custom_var=StringVar(value=self.prefs.get("custom_prompt",""))
+        self.ai_single_kw_var=BooleanVar(value=self.prefs.get("single_keywords",False))
         self._style_vars={}
         for s in ["Silhouette","White Background","Transparent Background","Digital Art"]:
             self._style_vars[s]=BooleanVar(value=False)
@@ -1257,6 +1344,16 @@ class App(ctk.CTk):
         self._desc_sl =self._slider(msf,"Description Length",self.ai_desc_var,20,500,int(self.ai_desc_var.get()))
         self._kw_sl   =self._slider(msf,"Keywords Count",self.ai_kw_var,5,49,int(min(int(self.ai_kw_var.get()),49)))
 
+        sk_row=ctk.CTkFrame(msf,fg_color=META_BG2,corner_radius=0)
+        sk_row.pack(fill="x",padx=10,pady=(2,8)); sk_row.grid_columnconfigure(0,weight=1)
+        ctk.CTkLabel(sk_row,text="Single Word Keywords",font=ctk.CTkFont("Segoe UI",11),
+            text_color=TXT2,fg_color=META_BG2).grid(row=0,column=0,sticky="w")
+        ctk.CTkSwitch(sk_row,text="",variable=self.ai_single_kw_var,
+            progress_color=META_ACC,button_color=TXT,text_color=TXT2,
+            fg_color=META_BDR,onvalue=True,offvalue=False,width=46,height=24,
+            command=self._save_settings
+        ).grid(row=0,column=1,sticky="e")
+
         # Anchor placeholder marks where the slider frames live in the pack order
         self._slider_anchor = ctk.CTkFrame(inner, fg_color=META_BG2, height=0, corner_radius=0)
         self._slider_anchor.pack(fill="x")
@@ -1387,6 +1484,7 @@ class App(ctk.CTk):
             "kw_count":min(int(self.ai_kw_var.get() or 49),49),
             "prompt_words":int(self.ai_words_var.get() or 60),
             "content_type":self.ai_content_var.get(),
+            "single_keywords":self.ai_single_kw_var.get(),
         })
         save_prefs(self.prefs)
 
@@ -1481,18 +1579,26 @@ class App(ctk.CTk):
             text_color=TXT2, fg_color=META_CARD, justify="center")
         inner_lbl.grid(row=0, column=0, sticky="nsew")
 
+        self._ws_box = ws
+        self._ws_click_area = click_area
+        self._ws_inner_lbl = inner_lbl
+
         # Whole box acts as both browse trigger and drop target
         for widget in (ws, click_area, inner_lbl):
             widget.bind("<Button-1>", lambda e: self._browse_images())
-        try:
-            click_area.drop_target_register("DND_Files")
-            click_area.dnd_bind("<<Drop>>", self._on_drop)
-            inner_lbl.drop_target_register("DND_Files")
-            inner_lbl.dnd_bind("<<Drop>>", self._on_drop)
-        except Exception:
-            pass
 
-        self._ws_box = ws
+        if DND_AVAILABLE:
+            # Registration must happen on the actual Tk widget path; CTkFrame
+            # exposes itself directly so this works on the frame and label.
+            for widget in (click_area, inner_lbl):
+                widget.drop_target_register(DND_FILES)
+                widget.dnd_bind("<<DropEnter>>", self._on_drag_enter)
+                widget.dnd_bind("<<DropLeave>>", self._on_drag_leave)
+                widget.dnd_bind("<<Drop>>", self._on_drop)
+        else:
+            inner_lbl.configure(
+                text="☁  Upload Workspace\n\n🖼️  🎬  📄  ✦\n\nClick to browse (drag & drop unavailable — install tkinterdnd2)\nSupported: JPG · PNG · GIF · WEBP · TIFF · SVG · EPS · MP4 · MOV")
+
 
         # STATUS ROW — directly above cards, zero gap
         self._stats_bar=ctk.CTkFrame(main,fg_color=META_BG3,corner_radius=0,height=30)
@@ -1540,13 +1646,39 @@ class App(ctk.CTk):
                           border_color=META_ACC if p==plat else META_BDR)
         self._save_settings()
 
+    def _on_drag_enter(self, event):
+        # Visual "drop ready" highlight, matching the reference screenshot
+        self._ws_box.configure(border_color=META_ACC, fg_color=META_ACC3)
+        self._ws_click_area.configure(fg_color=META_ACC3)
+        self._ws_inner_lbl.configure(fg_color=META_ACC3, text_color=TXT)
+        return event.action
+
+    def _on_drag_leave(self, event):
+        self._ws_box.configure(border_color=META_BDR2, fg_color=META_CARD)
+        self._ws_click_area.configure(fg_color=META_CARD)
+        self._ws_inner_lbl.configure(fg_color=META_CARD, text_color=TXT2)
+        return event.action
+
     def _on_drop(self,event):
+        self._on_drag_leave(event)
         raw=event.data
         if '{' in raw:
-            paths=[p.strip('{}') for p in raw.split()]
+            paths=[p.strip('{}') for p in raw.split('} {')]
+            paths=[p.strip('{}') for p in paths]
         else:
             paths=raw.split()
-        self._add_images(paths)
+        # Only existing files (folders dropped get expanded one level)
+        expanded=[]
+        for p in paths:
+            if os.path.isdir(p):
+                try:
+                    for fn in os.listdir(p):
+                        fp=os.path.join(p,fn)
+                        if os.path.isfile(fp): expanded.append(fp)
+                except Exception: pass
+            elif os.path.isfile(p):
+                expanded.append(p)
+        self._add_images(expanded)
 
     # ── Queue management (PERFORMANCE-CRITICAL — batched + async) ──────
     def _browse_images(self):
@@ -1562,28 +1694,56 @@ class App(ctk.CTk):
              and os.path.splitext(p)[1].lower() in ALL_SUPPORTED_EXTS]
         if not new: return
 
-        if len(new) > 25:
+        if len(new) > 15:
             self._import_with_progress(new)
         else:
             for path in new: self._add_card(path)
             self._update_stats()
 
     def _import_with_progress(self, paths):
-        """Show a progress dialog and add cards in small batches so the UI
-        thread never blocks for long, then load thumbnails fully async."""
+        """Add cards in small UI batches (so Tk's event loop is never blocked
+        for more than a few widgets at a time) while thumbnails are generated
+        by a small bounded worker pool in the background. We never read full
+        files on the main thread and never copy files anywhere — only a
+        downscaled PIL thumbnail is built, in a worker thread, from the
+        original path on disk."""
         dlg = ImportProgressDialog(self, len(paths))
         total = len(paths)
         state = {"i": 0}
 
+        # Bounded thumbnail worker pool — avoids spawning one OS thread per
+        # image (which is what caused 350-thread pileups and freezes).
+        thumb_jobs = queue.Queue()
+        for p in paths: pass  # filled incrementally below as cards are created
+        MAX_WORKERS = 4
+        stop_flag = {"stop": False}
+
+        def worker():
+            while not stop_flag["stop"]:
+                try:
+                    card = thumb_jobs.get(timeout=0.5)
+                except queue.Empty:
+                    if state["i"] >= total and thumb_jobs.empty():
+                        return
+                    continue
+                if card is None:
+                    return
+                img = make_thumb(card.path, (138, 80))
+                self._thumb_queue.put((card, img))
+
+        workers = [threading.Thread(target=worker, daemon=True) for _ in range(MAX_WORKERS)]
+        for w in workers: w.start()
+
         def add_batch():
-            BATCH = 15
+            BATCH = 6   # small batch keeps each mainloop tick short
             end = min(state["i"] + BATCH, total)
             for idx in range(state["i"], end):
-                self._add_card(paths[idx], queue_thumb=True)
+                card = self._add_card(paths[idx], queue_thumb=False)
+                thumb_jobs.put(card)
             state["i"] = end
             dlg.update_progress(end, total)
             if end < total:
-                self.after(1, add_batch)   # yield back to mainloop between batches
+                self.after(1, add_batch)
             else:
                 self._update_stats()
                 dlg.finish()
@@ -1606,10 +1766,9 @@ class App(ctk.CTk):
         return card
 
     def _request_thumb(self, card):
-        def _work():
-            img = make_thumb(card.path, (138, 80))
-            self._thumb_queue.put((card, img))
-        threading.Thread(target=_work, daemon=True).start()
+        threading.Thread(target=lambda:
+            self._thumb_queue.put((card, make_thumb(card.path,(138,80)))),
+            daemon=True).start()
 
     def _del_card(self,path):
         for c in self.cards:
@@ -1674,7 +1833,7 @@ class App(ctk.CTk):
             tc=int(self.ai_title_var.get() or 120)
             dc=int(self.ai_desc_var.get() or 200)
             kn=min(int(self.ai_kw_var.get() or 49),49)
-            prompt=build_meta_prompt(tc,dc,kn,ct,custom)
+            prompt=build_meta_prompt(tc,dc,kn,ct,custom,single_kw=self.ai_single_kw_var.get())
         else:
             mw=int(self.ai_words_var.get() or 60)
             prompt=build_prompt_prompt(mw,styles,ct,custom)
@@ -1691,17 +1850,17 @@ class App(ctk.CTk):
                 ext = os.path.splitext(card.path)[1].lower()
                 if ext in VECTOR_EXTS or ext in VIDEO_EXTS:
                     raise ValueError("Vector/video files need a rendered preview — convert to JPG first")
-                raw,provider=call_with_failover(card.path,prompt,self.prefs,
+                raw,provider,model_id,key_idx=call_with_failover(card.path,prompt,self.prefs,
                     status_cb=lambda msg:self.after(0,lambda m=msg:self.set_status(f"⟳  {m}",BLU)))
                 if mode=="meta":
                     title,desc,kw=parse_meta(raw)
                     if not title and not kw: raise ValueError(f"Could not parse: {raw[:80]}")
-                    self.after(0,lambda c=card,t=title,d=desc,k=kw:
-                        (c.set_result(t,d,k),c.set_status("done")))
+                    self.after(0,lambda c=card,t=title,d=desc,k=kw,p=provider,m=model_id,ki=key_idx:
+                        (c.set_result(t,d,k),c.set_model_used(p,m,ki),c.set_status("done")))
                 else:
                     prompt_text=raw.strip()
-                    self.after(0,lambda c=card,pt=prompt_text:
-                        (c.set_result(pt),c.set_status("done")))
+                    self.after(0,lambda c=card,pt=prompt_text,p=provider,m=model_id,ki=key_idx:
+                        (c.set_result(pt),c.set_model_used(p,m,ki),c.set_status("done")))
             except Exception as e:
                 err=str(e)[:100]; failed_paths.append(card.path)
                 self.after(0,lambda c=card,e=err:c.set_status("failed",e))
