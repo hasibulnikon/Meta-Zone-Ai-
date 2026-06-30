@@ -22,7 +22,7 @@ META_ACC  = "#2f5ce8"; META_ACC2= "#1d3aa8"; META_ACC3= "#0f1d4a"
 
 # ── Embedder theme (deep green) ─────────────────────────────────────────
 EMB_BG    = "#020c08"; EMB_BG2  = "#04140d"; EMB_BG3  = "#071e14"
-EMB_CARD  = "#04140d"; EMB_BDR  = "#16352490" ; EMB_BDR2 = "#1d4530"
+EMB_CARD  = "#04140d"; EMB_BDR  = "#163524" ; EMB_BDR2 = "#1d4530"
 EMB_ACC   = "#2a9d52"; EMB_ACC2 = "#1b6e38"; EMB_ACC3 = "#0c2a17"
 
 # Generic aliases used before a theme context is known (title bar, status bar)
