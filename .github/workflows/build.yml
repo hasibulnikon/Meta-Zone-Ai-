@@ -27,13 +27,8 @@ jobs:
       - name: Verify files
         run: |
           dir
-
-      - name: Clean build artifacts
-        shell: powershell
-        run: |
-          if (Test-Path "*.spec") { Remove-Item "*.spec" -Force }
-          if (Test-Path "build") { Remove-Item "build" -Recurse -Force }
-          if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force }
+          echo "Looking for exiftool.exe:"
+          if (Test-Path "exiftool.exe") { Write-Host "exiftool.exe found!" } else { Write-Host "exiftool.exe NOT found!" }
 
       - name: Build executable
         run: >
