@@ -29,10 +29,11 @@ jobs:
           dir
 
       - name: Clean build artifacts
+        shell: powershell
         run: |
-          if exist "*.spec" del *.spec
-          if exist "build" rmdir /s /q build
-          if exist "dist" rmdir /s /q dist
+          if (Test-Path "*.spec") { Remove-Item "*.spec" -Force }
+          if (Test-Path "build") { Remove-Item "build" -Recurse -Force }
+          if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force }
 
       - name: Build executable
         run: >
