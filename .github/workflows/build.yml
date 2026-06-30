@@ -28,6 +28,12 @@ jobs:
         run: |
           dir
 
+      - name: Clean build artifacts
+        run: |
+          if exist "*.spec" del *.spec
+          if exist "build" rmdir /s /q build
+          if exist "dist" rmdir /s /q dist
+
       - name: Build executable
         run: >
           pyinstaller
@@ -36,7 +42,7 @@ jobs:
           --clean
           --noconfirm
           --name "MetaZone"
-          --add-data "exiftool.exe;."
+          --add-data "${{ github.workspace }}/exiftool.exe:."
           metadata_tool.py
 
       - name: Upload EXE artifact
