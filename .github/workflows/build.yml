@@ -1,48 +1,119 @@
-name: Build Meta Zone
+name: Build Windows EXE
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
+        run: pip install pyinstaller pillow customtkinter
+
+      - name: Download ExifTool for Windows
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller pillow
+          Invoke-WebRequest -Uri "https://oliverbetz.de/cms/files/Artikel/ExifTool-for-Windows/ExifTool_install_13.59_64.exe" -OutFile ExifTool_install.exe -UseBasicParsing
+          Start-Process -FilePath "ExifTool_install.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=C:\ExifTool" -Wait
+          if (Test-Path "C:\ExifTool\exiftool.exe") {
+            Write-Host "ExifTool found at C:\ExifTool"
+          } elseif (Test-Path "C:\Windows\exiftool.exe") {
+            Copy-Item "C:\Windows\exiftool.exe" "C:\ExifTool\exiftool.exe" -Force
+          } else {
+            $found = Get-ChildItem -Path "C:\" -Filter "exiftool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              New-Item -ItemType Directory -Force -Path "C:\ExifTool"
+              Copy-Item $found.FullName "C:\ExifTool\exiftool.exe"
+            } else { Write-Error "ExifTool not found"; exit 1 }
+          }
+          Write-Host "ExifTool size: $((Get-Item 'C:\ExifTool\exiftool.exe').Length) bytes"
+        shell: pwsh
 
-      - name: Verify files
+      - name: Build EXE with PyInstaller
         run: |
-          dir
-          echo "Looking for exiftool.exe:"
-          if (Test-Path "exiftool.exe") { Write-Host "exiftool.exe found!" } else { Write-Host "exiftool.exe NOT found!" }
+          $args = @(
+            "--onefile",
+            "--windowed",
+            "--name", "MetaZone"
+          )
+          if (Test-Path "icon.png") {
+            $args += "--icon=icon.png"
+          } elseif (Test-Path "icon.ico") {
+            $args += "--icon=icon.ico"
+          }
+          $args += "--add-data=C:\ExifTool\exiftool.exe;exiftool_pkg"
+          if (Test-Path "C:\ExifTool\exiftool_files") {
+            $args += "--add-data=C:\ExifTool\exiftool_files;exiftool_pkg\exiftool_files"
+          }
+          if (Test-Path "icon.png") {
+            $args += "--add-data=icon.png;."
+          }
+          $args += "metadata_tool.py"
+          Write-Host "Running: pyinstaller $args"
+          & pyinstaller @args
+        shell: pwsh
 
-      - name: Build executable
-        run: >
-          pyinstaller
-          --onefile
-          --windowed
-          --clean
-          --noconfirm
-          --name "MetaZone"
-          --add-data "${{ github.workspace }}/exiftool.exe:."
-          metadata_tool.py
-
-      - name: Upload EXE artifact
+      - name: Upload EXE as artifact
         uses: actions/upload-artifact@v4
         with:
           name: MetaZone-Windows
-          path: dist/MetaZone.exe
+          path: dist\MetaZone.exe
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0-beta
+          name: Meta Zone v1.0 Beta
+          body: |
+            ## Meta Zone v1.0 Beta
+
+            ### ✨ NEW — AI Metadata Generator Tab
+            Generate titles, descriptions, and keywords directly from your images using AI.
+
+            **Supported AI Providers:**
+            - 🟢 Gemini (free tier available — recommended)
+            - 🔵 OpenRouter (many free models)
+            - 🟣 Claude (Haiku / Sonnet)
+            - 🟠 Groq (free, limited vision)
+            - 🟡 Mistral (Pixtral vision)
+
+            **Supported Platforms:**
+            Adobe Stock · Shutterstock · Getty Images · iStock · Freepik · Pond5 · Vecteezy
+
+            **AI Workflow:**
+            1. Go to ✨ AI Generate tab
+            2. Choose provider + paste API key → Save
+            3. Select image folder
+            4. Choose target platform
+            5. Click Generate — AI analyzes each image
+            6. Save CSV or click "Send to Embed Tab" for one-click embedding
+
+            ---
+
+            ### 📋 Embed Metadata Tab (all v0.5 features retained)
+            - Match Filename Only toggle
+            - Include Sub-Folders toggle
+            - Remove Program Name toggle
+            - Activity log with timestamps
+            - Recent CSV and folder history
+            - Export log to TXT
+
+            ### How to use
+            1. Download MetaZone.exe
+            2. Double-click — no install needed
+            3. AI Generate tab: pick provider → generate → save CSV
+            4. Embed tab: load CSV → select folder → embed
+          files: dist\MetaZone.exe
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
