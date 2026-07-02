@@ -4,21 +4,36 @@ import csv, subprocess, os, sys, threading, datetime, json, base64, socket, queu
 import urllib.request, urllib.error
 from PIL import Image
 
-# Drag-and-drop support — tkinterdnd2 must wrap the root window itself.
-# Auto-install if missing so the user never has to run pip manually.
+# Drag-and-drop via tkinterdnd2.
+# When running as a PyInstaller EXE (sys.frozen=True), the package is
+# bundled alongside the binary — never try to pip-install in that case.
+# When running as a plain .py, auto-install if missing.
+def _ensure_tkdnd():
+    if getattr(sys, 'frozen', False):
+        # Add the bundled tkinterdnd2 folder to sys.path so the import works
+        bundled = os.path.join(sys._MEIPASS, 'tkinterdnd2')
+        if bundled not in sys.path:
+            sys.path.insert(0, bundled)
+        return
+    # Plain .py — install silently if missing
+    try:
+        import tkinterdnd2  # noqa: F401
+    except ImportError:
+        import subprocess as _sp
+        try:
+            _sp.check_call([sys.executable, "-m", "pip", "install",
+                            "tkinterdnd2", "--quiet"], timeout=60)
+        except Exception:
+            pass
+
+_ensure_tkdnd()
+
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
     DND_AVAILABLE = True
 except ImportError:
-    import subprocess as _sp
-    try:
-        _sp.check_call([sys.executable, "-m", "pip", "install", "tkinterdnd2",
-                        "--quiet", "--break-system-packages"], timeout=60)
-        from tkinterdnd2 import TkinterDnD, DND_FILES
-        DND_AVAILABLE = True
-    except Exception:
-        DND_AVAILABLE = False
-        DND_FILES = None
+    DND_AVAILABLE = False
+    DND_FILES = None
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
