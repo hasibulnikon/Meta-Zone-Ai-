@@ -1365,29 +1365,53 @@ class App(DnDCTk):
 
         # UPLOAD WORKSPACE — vertically compact, thumbnail grid
         ws=ctk.CTkFrame(main,fg_color=GLASS,corner_radius=12,
-            border_width=1,border_color=GLASS_BDR,height=128)
-        ws.grid(row=1,column=0,sticky="ew",padx=8,pady=(6,4)); ws.grid_propagate(False)
-        ws.grid_columnconfigure(0,weight=1); ws.grid_rowconfigure(0,weight=1)
+            border_width=1,border_color=GLASS_BDR)
+        ws.grid(row=1,column=0,sticky="ew",padx=8,pady=(6,4))
+        ws.grid_columnconfigure(0,weight=1)
+        ws.grid_rowconfigure(0,weight=1)
 
-        self._thumb_grid=ctk.CTkFrame(ws,fg_color="transparent",
-            corner_radius=8,cursor="hand2")
-        self._thumb_grid.place(relx=0,rely=0,relwidth=1,relheight=1)
+        # Scrollable inner container for thumbnails — horizontal scroll
+        self._thumb_scroll=ctk.CTkScrollableFrame(ws,
+            fg_color=BG3,corner_radius=8,
+            orientation="horizontal",
+            scrollbar_button_color=BG4,
+            scrollbar_button_hover_color=GLASS_BDR,
+            height=110,cursor="hand2")
+        self._thumb_scroll.grid(row=0,column=0,sticky="ew",padx=8,pady=8)
+        self._thumb_scroll.grid_columnconfigure(0,weight=1)
+        # _thumb_grid is the inner frame we place cells into
+        self._thumb_grid=self._thumb_scroll
 
-        self._ws_empty=ctk.CTkLabel(self._thumb_grid,
-            text="🖼️  🎬  ✦     Drag & drop or click to browse  ·  JPG PNG GIF WEBP TIFF SVG EPS MP4 MOV",
-            font=ctk.CTkFont("Segoe UI",11,"bold"),text_color=TXT3,fg_color="transparent")
-        self._ws_empty.place(relx=0.5,rely=0.5,anchor="center")
+        self._ws_empty=ctk.CTkLabel(self._thumb_scroll,
+            text="🖼️  🎬  ✦     Drag & drop or click to browse"
+                 "\nJPG  PNG  GIF  WEBP  TIFF  SVG  EPS  MP4  MOV",
+            font=ctk.CTkFont("Segoe UI",11,"bold"),
+            text_color=TXT3,fg_color=BG3,justify="center")
+        self._ws_empty.pack(expand=True,fill="both",padx=20,pady=12)
 
-        for w in (ws,self._thumb_grid,self._ws_empty):
+        # Bind clicks to browse on all ws surfaces
+        for w in (ws,self._thumb_scroll,self._ws_empty):
             w.bind("<Button-1>",lambda e:self._browse_images())
+        # Also bind on the scrollable frame's internal canvas
+        try:
+            self._thumb_scroll._parent_canvas.bind(
+                "<Button-1>",lambda e:self._browse_images())
+        except: pass
+
         if DND_AVAILABLE:
-            for w in (self._thumb_grid,self._ws_empty):
+            for w in (self._thumb_scroll,self._ws_empty,ws):
                 try:
                     w.drop_target_register(DND_FILES)
                     w.dnd_bind("<<DropEnter>>",self._on_drag_enter)
                     w.dnd_bind("<<DropLeave>>",self._on_drag_leave)
                     w.dnd_bind("<<Drop>>",self._on_drop)
                 except: pass
+            try:
+                self._thumb_scroll._parent_canvas.drop_target_register(DND_FILES)
+                self._thumb_scroll._parent_canvas.dnd_bind("<<DropEnter>>",self._on_drag_enter)
+                self._thumb_scroll._parent_canvas.dnd_bind("<<DropLeave>>",self._on_drag_leave)
+                self._thumb_scroll._parent_canvas.dnd_bind("<<Drop>>",self._on_drop)
+            except: pass
 
         # Progress bar row
         prog=ctk.CTkFrame(main,fg_color=BG1,corner_radius=0,height=30)
@@ -1441,10 +1465,10 @@ class App(DnDCTk):
     # ── DnD ────────────────────────────────────────────────────────
     def _on_drag_enter(self,event):
         self._ws_empty.configure(text_color=GRN)
-        self._thumb_grid.configure(fg_color=GRN_DIM); return event.action
+        self._thumb_scroll.configure(fg_color=GRN_DIM); return event.action
     def _on_drag_leave(self,event):
         self._ws_empty.configure(text_color=TXT3)
-        self._thumb_grid.configure(fg_color="transparent"); return event.action
+        self._thumb_scroll.configure(fg_color=BG3); return event.action
     def _on_drop(self,event):
         self._on_drag_leave(event)
         raw=event.data
@@ -1483,33 +1507,48 @@ class App(DnDCTk):
         self._update_progress()
 
     def _rebuild_thumb_grid(self):
-        for w in self._thumb_grid.winfo_children(): w.destroy()
+        # Destroy all thumb cells (not the empty label — it's managed separately)
+        for w in self._thumb_grid.winfo_children():
+            if w is not self._ws_empty:
+                try: w.destroy()
+                except: pass
+
         total=len(self._all_paths)
         if total==0:
-            self._ws_empty.place(relx=0.5,rely=0.5,anchor="center"); return
-        self._ws_empty.place_forget()
+            self._ws_empty.pack(expand=True,fill="both",padx=20,pady=12)
+            return
+        self._ws_empty.pack_forget()
+
         CELL=90
         for i,path in enumerate(self._all_paths):
-            lbl=ctk.CTkLabel(self._thumb_grid,text="⟳",
-                font=ctk.CTkFont("Segoe UI",11),fg_color=BG4,text_color=TXT3,
-                width=CELL-2,height=CELL-2,corner_radius=4)
-            lbl.place(x=i*CELL+1,y=1,width=CELL-2,height=CELL-2)
-            # Status dot
+            cell=ctk.CTkFrame(self._thumb_grid,fg_color=BG4,
+                corner_radius=4,width=CELL,height=CELL)
+            cell.pack(side="left",padx=(0,2))
+            cell.pack_propagate(False)
+
+            lbl=ctk.CTkLabel(cell,text="⟳",
+                font=ctk.CTkFont("Segoe UI",11),
+                fg_color=BG4,text_color=TXT3,
+                width=CELL,height=CELL,corner_radius=4)
+            lbl.place(relx=0.5,rely=0.5,anchor="center")
+
+            # Status dot overlay
             st=self._results.get(path,{}).get("status","waiting")
-            if st=="done":
-                dot=ctk.CTkLabel(self._thumb_grid,text="✓",
+            dot_text= "✓" if st=="done" else ("✗" if st=="failed" else "")
+            dot_bg  = GRN_DIM if st=="done" else (RED_DIM if st=="failed" else "")
+            dot_fg  = GRN if st=="done" else (RED_BTN if st=="failed" else "")
+            if dot_text:
+                dot=ctk.CTkLabel(cell,text=dot_text,
                     font=ctk.CTkFont("Segoe UI",8,"bold"),
-                    fg_color=GRN_DIM,text_color=GRN,corner_radius=8,width=14,height=14)
-                dot.place(x=i*CELL+CELL-16,y=2)
-            elif st=="failed":
-                dot=ctk.CTkLabel(self._thumb_grid,text="✗",
-                    font=ctk.CTkFont("Segoe UI",8,"bold"),
-                    fg_color=RED_DIM,text_color=RED_BTN,corner_radius=8,width=14,height=14)
-                dot.place(x=i*CELL+CELL-16,y=2)
+                    fg_color=dot_bg,text_color=dot_fg,
+                    corner_radius=8,width=14,height=14)
+                dot.place(relx=1.0,rely=0.0,anchor="ne",x=-2,y=2)
+
             def _load(p=path,l=lbl):
                 img=make_thumb(p,(CELL-4,CELL-4))
                 if img: self._thumb_queue.put((l,img))
             threading.Thread(target=_load,daemon=True).start()
+
 
     def _update_progress(self,done=None,total=None,msg=None):
         t=total or len(self._all_paths)
