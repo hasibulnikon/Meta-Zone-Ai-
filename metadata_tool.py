@@ -1376,7 +1376,7 @@ class App(DnDCTk):
             orientation="horizontal",
             scrollbar_button_color=BG4,
             scrollbar_button_hover_color=GLASS_BDR,
-            height=110,cursor="hand2")
+            height=110)
         self._thumb_scroll.grid(row=0,column=0,sticky="ew",padx=8,pady=8)
         self._thumb_scroll.grid_columnconfigure(0,weight=1)
         # _thumb_grid is the inner frame we place cells into
