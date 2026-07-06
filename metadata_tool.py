@@ -245,7 +245,7 @@ def img_to_b64(path):
           '.tiff':'image/tiff','.tif':'image/tiff'}.get(ext,'image/jpeg')
     return base64.b64encode(data).decode(),mime
 
-def _post(url,body,headers,timeout=90):
+def _post(url,body,headers,timeout=30):
     req=urllib.request.Request(url,data=json.dumps(body).encode(),
                                headers=headers,method="POST")
     try:
@@ -392,27 +392,43 @@ def get_active_keys(prefs):
     return seq
 
 def call_with_failover(path,prompt,prefs,status_cb=None):
+    """Try each active key exactly once in order.
+    On failure, immediately move to the next key.
+    If all keys fail, raise with the last error."""
     seq=get_active_keys(prefs)
     if not seq: raise RuntimeError("No active API keys. Open 'API Configuration'.")
     last_err=""
     for provider,key,model,key_idx in seq:
         try:
-            if status_cb: status_cb(f"Trying {provider} · {model_label(provider,model)}…")
+            if status_cb:
+                status_cb(f"{provider} · {model_label(provider,model)}…")
             raw=CALLERS[provider](key,model,path,prompt)
             return raw,provider,model,key_idx
         except Exception as e:
             last_err=f"{provider}: {str(e)[:120]}"
-    raise RuntimeError(f"All keys failed. Last: {last_err}")
+            # Log the failure and immediately try the next key
+            continue
+    raise RuntimeError(f"All keys failed. Last error: {last_err}")
 
 
 # ── FIXED prompt builder with stronger output enforcement ──────────────
 def build_meta_prompt(title_c, desc_c, kw_n, custom_prompt="",
-                      single_kw=False, themes="", prefix="", suffix_title=""):
+                      single_kw=False, themes="", prefix="", suffix_title="",
+                      avoid_copyright=False):
     directives = []
     if themes:
         directives.append(f"Content theme: {themes}. Reflect this in the metadata.")
     if single_kw:
         directives.append(f"Every keyword must be a single word only (no spaces or hyphens).")
+    if avoid_copyright:
+        directives.append(
+            "CRITICAL: Do NOT include any brand names, company names, trademarked terms, "
+            "copyrighted characters, logos, product names, celebrity names, or any term that "
+            "could constitute copyright or trademark infringement. Use only generic descriptive "
+            "language. If you detect a logo, brand, or copyrighted element in the image, "
+            "describe it generically (e.g. 'logo' not the brand name, 'sports car' not the "
+            "manufacturer, 'cartoon character' not the character's name)."
+        )
     if custom_prompt.strip():
         directives.append(
             f"MANDATORY COMMAND — override your defaults and apply this to title+description+keywords: "
@@ -533,6 +549,28 @@ def enforce_single_keywords(kw_string):
         if single.lower() not in seen:
             seen.add(single.lower()); result.append(single)
     return ", ".join(result)
+
+
+# Common brand/trademark fragments to filter from keywords when avoid_copyright is on.
+# This is a post-processing safety net — the main enforcement is in the prompt itself.
+_COPYRIGHT_FRAGMENTS = {
+    "adobe","shutterstock","getty","istock","freepik","vecteezy","alamy","pond5",
+    "nike","adidas","apple","google","microsoft","amazon","facebook","meta","instagram",
+    "twitter","youtube","netflix","disney","marvel","dc","warner","sony","samsung",
+    "coca","pepsi","mcdonalds","starbucks","gucci","louis","vuitton","prada","chanel",
+    "rolex","ferrari","bmw","mercedes","tesla","ford","toyota","honda","nikon","canon",
+    "playstation","xbox","nintendo","lego","barbie","superman","batman","spiderman",
+}
+
+def _strip_copyright_keywords(kw_string):
+    """Remove keywords that contain known brand/copyright fragments."""
+    raw = [k.strip() for k in kw_string.split(",") if k.strip()]
+    clean = []
+    for kw in raw:
+        kw_lower = kw.lower().replace(" ","").replace("-","")
+        if not any(frag in kw_lower for frag in _COPYRIGHT_FRAGMENTS):
+            clean.append(kw)
+    return ", ".join(clean)
 
 
 def make_thumb(path, size=(120,85)):
@@ -802,10 +840,10 @@ class APIManagerWindow(ctk.CTkToplevel):
 #  RESULT CARD  (in Generated Metadata section)
 # ══════════════════════════════════════════════════════════════════════
 class MetaResultCard(ctk.CTkFrame):
-    def __init__(self,master,path,result,on_redo,**kw):
+    def __init__(self,master,path,result,on_redo,mode="meta",**kw):
         super().__init__(master,fg_color=GLASS,corner_radius=12,
             border_width=1,border_color=GLASS_BDR,**kw)
-        self.path=path; self.result=result
+        self.path=path; self.result=result; self.mode=mode
         self._build(on_redo)
 
     def _build(self,on_redo):
@@ -825,6 +863,41 @@ class MetaResultCard(ctk.CTkFrame):
         ctk.CTkLabel(self,text=fname,font=ctk.CTkFont("Segoe UI",11,"bold"),
             text_color=TXT2,fg_color="transparent",anchor="w"
         ).grid(row=0,column=1,sticky="w",pady=(10,2),padx=(0,10))
+
+        if self.mode=="prompt":
+            prompt_val=self.result.get("prompt","")
+            wcount=len(prompt_val.split()) if prompt_val else 0
+            phdr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
+            phdr.grid(row=1,column=1,sticky="ew",padx=(0,10),pady=(4,0))
+            phdr.grid_columnconfigure(1,weight=1)
+            ctk.CTkLabel(phdr,text=f"Generated Prompt  ({wcount} words)",
+                font=ctk.CTkFont("Segoe UI",9,"bold"),text_color=TXT3,
+                fg_color="transparent").grid(row=0,column=0,sticky="w")
+            pbf=ctk.CTkFrame(phdr,fg_color="transparent",corner_radius=0)
+            pbf.grid(row=0,column=2,sticky="e")
+            ctk.CTkButton(pbf,text="⧉ Copy",width=62,height=18,
+                font=ctk.CTkFont("Segoe UI",9),fg_color=BG4,hover_color=BG3,
+                text_color=TXT3,corner_radius=20,
+                command=lambda:self._copy(prompt_val)).pack(side="left",padx=(0,4))
+            pbox=ctk.CTkTextbox(self,height=120,
+                font=ctk.CTkFont("Segoe UI",10),fg_color=BG3,text_color=CYAN,
+                border_color=GLASS_BDR,border_width=1,corner_radius=6,wrap="word")
+            pbox.grid(row=2,column=1,sticky="ew",padx=(0,10),pady=(0,4))
+            if prompt_val: pbox.insert("1.0",prompt_val)
+            ftr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
+            ftr.grid(row=3,column=1,sticky="ew",padx=(0,10),pady=(4,10))
+            ftr.grid_columnconfigure(1,weight=1)
+            model_used=self.result.get("model_used","")
+            if model_used:
+                ctk.CTkLabel(ftr,text=model_used,font=ctk.CTkFont("Segoe UI",9),
+                    text_color=TXT3,fg_color=BG4,corner_radius=20,padx=8,pady=2
+                ).grid(row=0,column=1,sticky="e",padx=(8,0))
+            ctk.CTkButton(ftr,text="↺ Redo",width=76,height=26,
+                font=ctk.CTkFont("Segoe UI",10,"bold"),
+                fg_color=BG4,hover_color=AMB_DIM,text_color=AMB_BTN,
+                border_width=1,border_color=GLASS_BDR,corner_radius=8,
+                command=on_redo).grid(row=0,column=2,padx=(8,0))
+            return   # prompt mode done
 
         title=self.result.get("title","")
         desc=self.result.get("desc","")
@@ -854,11 +927,18 @@ class MetaResultCard(ctk.CTkFrame):
                 text_color=TXT3,corner_radius=20,
                 command=lambda k=label,row=row_idx:self._paste(k)).pack(side="left")
 
-            preview=val[:250]+"…" if len(val)>250 else (val or "(none)")
-            ctk.CTkLabel(self,text=preview,
-                font=ctk.CTkFont("Segoe UI",10),text_color=color if val else TXT3,
-                fg_color="transparent",anchor="w",wraplength=520,justify="left"
-            ).grid(row=row_idx*2,column=1,sticky="ew",padx=(0,10),pady=(0,2))
+            field_h = 36 if not is_kw else 60
+            box=ctk.CTkTextbox(self,height=field_h,
+                font=ctk.CTkFont("Segoe UI",10),
+                fg_color=BG3,text_color=color,
+                border_color=GLASS_BDR,border_width=1,corner_radius=6,wrap="word")
+            box.grid(row=row_idx*2,column=1,sticky="ew",padx=(0,10),pady=(0,2))
+            if val: box.insert("1.0",val)
+            else: box.insert("1.0","(none)")
+            # Store reference so paste can update it
+            if is_kw: self._kw_box=box
+            elif label=="Title": self._title_box=box
+            else: self._desc_box=box
 
         # Footer
         ftr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
@@ -942,6 +1022,7 @@ class App(DnDCTk):
         self.ai_words_var   =StringVar(value=str(self.prefs.get("prompt_words",60)))
         self.ai_custom_var  =StringVar(value=self.prefs.get("custom_prompt",""))
         self.ai_single_kw_var=BooleanVar(value=self.prefs.get("single_keywords",False))
+        self.ai_avoid_copyright_var=BooleanVar(value=self.prefs.get("avoid_copyright",False))
         self.ai_concurrency_var=IntVar(value=self.prefs.get("concurrency",1))
         self.ai_prefix_on_var=BooleanVar(value=False)
         self.ai_suffix_on_var=BooleanVar(value=False)
@@ -1144,13 +1225,22 @@ class App(DnDCTk):
         self._kw_sl   =self._slider(msf,"Keywords Count",self.ai_kw_var,5,49,int(self.ai_kw_var.get()))
         # Single keyword toggle
         sk_row=ctk.CTkFrame(msf,fg_color=BG2,corner_radius=0)
-        sk_row.pack(fill="x",padx=10,pady=(2,6)); sk_row.grid_columnconfigure(0,weight=1)
+        sk_row.pack(fill="x",padx=10,pady=(2,4)); sk_row.grid_columnconfigure(0,weight=1)
         ctk.CTkLabel(sk_row,text="Single Word Keywords",font=ctk.CTkFont("Segoe UI",11),
             text_color=TXT2,fg_color=BG2).grid(row=0,column=0,sticky="w")
         ctk.CTkSwitch(sk_row,text="",variable=self.ai_single_kw_var,
             progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
             onvalue=True,offvalue=False,width=46,height=24,command=self._save_settings
         ).grid(row=0,column=1,sticky="e")
+
+        ac_row=ctk.CTkFrame(msf,fg_color=BG3,corner_radius=8,border_width=1,border_color=GLASS_BDR)
+        ac_row.pack(fill="x",padx=10,pady=(2,8)); ac_row.grid_columnconfigure(0,weight=1)
+        ctk.CTkLabel(ac_row,text="🚫  Avoid Copyright",font=ctk.CTkFont("Segoe UI",11,"bold"),
+            text_color=TXT2,fg_color=BG3).grid(row=0,column=0,sticky="w",padx=8,pady=6)
+        ctk.CTkSwitch(ac_row,text="",variable=self.ai_avoid_copyright_var,
+            progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
+            onvalue=True,offvalue=False,width=46,height=24,command=self._save_settings
+        ).grid(row=0,column=1,sticky="e",padx=8)
 
         self._slider_anchor=ctk.CTkFrame(inner,fg_color=BG2,height=0,corner_radius=0)
         self._slider_anchor.pack(fill="x")
@@ -1163,10 +1253,25 @@ class App(DnDCTk):
 
         self._div(inner)
 
-        # Content Themes (replaces Content Type)
-        self._lbl(inner,"CONTENT THEMES")
+        # ── ADVANCED OPTIONS (collapsible) ─────────────────────────
+        self._adv_visible=False
+        self._adv_body=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
+        adv_btn=ctk.CTkButton(inner,text="▶  Advanced Options",height=32,
+            font=ctk.CTkFont("Segoe UI",11,"bold"),
+            fg_color=BG3,hover_color=BG4,text_color=TXT2,
+            border_width=1,border_color=GLASS_BDR,corner_radius=8,anchor="w",
+            command=self._toggle_advanced)
+        adv_btn.pack(fill="x",padx=10,pady=(0,4))
+        self._adv_btn=adv_btn
+
+        ab=self._adv_body
+        ab.grid_columnconfigure(0,weight=1)
+
+        # Content Themes
+        ctk.CTkLabel(ab,text="CONTENT THEMES",font=ctk.CTkFont("Segoe UI",9,"bold"),
+            text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(8,2))
         for s in ["Silhouette","White Background","Transparent","Vector","Videos"]:
-            rf=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
+            rf=ctk.CTkFrame(ab,fg_color=BG2,corner_radius=0)
             rf.pack(fill="x",padx=10,pady=1); rf.grid_columnconfigure(0,weight=1)
             ctk.CTkLabel(rf,text=s,font=ctk.CTkFont("Segoe UI",11),
                 text_color=TXT2,fg_color=BG2).grid(row=0,column=0,sticky="w")
@@ -1175,53 +1280,48 @@ class App(DnDCTk):
                 onvalue=True,offvalue=False,width=46,height=24
             ).grid(row=0,column=1,sticky="e")
 
-        # Prefix / Suffix toggles
-        self._div(inner)
-        self._lbl(inner,"TITLE PREFIX / SUFFIX")
+        ctk.CTkFrame(ab,fg_color=GLASS_BDR,height=1,corner_radius=0).pack(fill="x",padx=8,pady=6)
+
+        # Prefix / Suffix — each entry appears directly under its toggle
+        ctk.CTkLabel(ab,text="TITLE PREFIX / SUFFIX",font=ctk.CTkFont("Segoe UI",9,"bold"),
+            text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(4,2))
+
         for label,on_var,text_var in [
             ("Add Prefix",self.ai_prefix_on_var,self.ai_prefix_text_var),
             ("Add Suffix",self.ai_suffix_on_var,self.ai_suffix_text_var),
         ]:
-            toggle_row=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
-            toggle_row.pack(fill="x",padx=10,pady=(1,0)); toggle_row.grid_columnconfigure(0,weight=1)
-            ctk.CTkLabel(toggle_row,text=label,font=ctk.CTkFont("Segoe UI",11),
+            grp=ctk.CTkFrame(ab,fg_color=BG2,corner_radius=0)
+            grp.pack(fill="x",padx=10,pady=(1,0)); grp.grid_columnconfigure(0,weight=1)
+            ctk.CTkLabel(grp,text=label,font=ctk.CTkFont("Segoe UI",11),
                 text_color=TXT2,fg_color=BG2).grid(row=0,column=0,sticky="w")
-            txt_entry=ctk.CTkEntry(inner,textvariable=text_var,
-                placeholder_text=f"Enter {label.split()[1].lower()}…",height=32,
+            txt_entry=ctk.CTkEntry(grp,textvariable=text_var,
+                placeholder_text=f"Type {label.split()[1].lower()} here…",height=30,
                 font=ctk.CTkFont("Segoe UI",11),fg_color=BG3,text_color=TXT,
                 border_color=GLASS_BDR,corner_radius=8)
-
-            def _toggle_entry(v,entry=txt_entry,var=on_var):
-                if var.get(): entry.pack(fill="x",padx=10,pady=(2,6))
-                else: entry.pack_forget()
-            sw=ctk.CTkSwitch(toggle_row,text="",variable=on_var,
+            # Entry starts hidden
+            def _toggle(ov=on_var,e=txt_entry,g=grp):
+                if ov.get(): e.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(4,4))
+                else: e.grid_remove()
+            sw=ctk.CTkSwitch(grp,text="",variable=on_var,
                 progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
-                onvalue=True,offvalue=False,width=46,height=24,
-                command=lambda v=None,ov=on_var,e=txt_entry:
-                    (e.pack(fill="x",padx=10,pady=(2,6)) if ov.get() else e.pack_forget()))
+                onvalue=True,offvalue=False,width=46,height=24,command=_toggle)
             sw.grid(row=0,column=1,sticky="e")
 
-        self._div(inner)
+        ctk.CTkFrame(ab,fg_color=GLASS_BDR,height=1,corner_radius=0).pack(fill="x",padx=8,pady=6)
 
         # Custom System Prompt
-        cp_hdr=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
-        cp_hdr.pack(fill="x",padx=10); cp_hdr.grid_columnconfigure(0,weight=1)
-        ctk.CTkLabel(cp_hdr,text="Custom System Prompt",
-            font=ctk.CTkFont("Segoe UI",11,"bold"),text_color=TXT2,fg_color=BG2
-        ).grid(row=0,column=0,sticky="w")
-        ctk.CTkLabel(cp_hdr,text="Auto-Saved",font=ctk.CTkFont("Segoe UI",9),
-            text_color=TXT3,fg_color=BG3,corner_radius=20,padx=6,pady=2
-        ).grid(row=0,column=1,sticky="e")
-        self._custom_box=ctk.CTkTextbox(inner,height=72,
+        ctk.CTkLabel(ab,text="CUSTOM SYSTEM PROMPT",font=ctk.CTkFont("Segoe UI",9,"bold"),
+            text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(4,2))
+        self._custom_box=ctk.CTkTextbox(ab,height=68,
             font=ctk.CTkFont("Segoe UI",11),fg_color=BG3,text_color=TXT,
             border_color=GLASS_BDR,border_width=1,corner_radius=8,wrap="word")
-        self._custom_box.pack(fill="x",padx=10,pady=(4,4))
+        self._custom_box.pack(fill="x",padx=10,pady=(0,4))
         if self.ai_custom_var.get(): self._custom_box.insert("1.0",self.ai_custom_var.get())
         self._custom_box.bind("<KeyRelease>",lambda e:self._save_custom())
-        ctk.CTkButton(inner,text="↺  Reset to Default",height=30,
+        ctk.CTkButton(ab,text="↺  Reset to Default",height=28,
             font=ctk.CTkFont("Segoe UI",11),fg_color="transparent",
             hover_color=BG3,text_color=CYAN,corner_radius=6,anchor="w",
-            command=self._reset_defaults).pack(anchor="w",padx=10,pady=(0,16))
+            command=self._reset_defaults).pack(anchor="w",padx=10,pady=(0,10))
 
     def _set_mode(self,mode):
         self.current_mode=mode
@@ -1236,6 +1336,39 @@ class App(DnDCTk):
             self._meta_sliders_f.pack_forget()
             self._prompt_sliders_f.pack(fill="x",before=self._slider_anchor)
         self._clear_results()
+
+    def _toggle_advanced(self):
+        self._adv_visible=not self._adv_visible
+        if self._adv_visible:
+            self._adv_body.pack(fill="x",padx=0,pady=(0,4))
+            self._adv_btn.configure(text="▼  Advanced Options")
+        else:
+            self._adv_body.pack_forget()
+            self._adv_btn.configure(text="▶  Advanced Options")
+
+    def _pause_ai(self):
+        """Pause: set flag, workers check it between images."""
+        if not self.ai_running: return
+        self._ai_paused = not getattr(self,"_ai_paused",False)
+        if self._ai_paused:
+            self._pause_btn.configure(text="▶  Resume",fg_color=GRN_DIM,text_color=GRN)
+            self.set_status("⏸  Paused",AMB_BTN)
+        else:
+            self._pause_btn.configure(text="⏸  Pause",fg_color=AMB_DIM,text_color=AMB_BTN)
+            self.set_status("▶  Resuming…",GRN)
+
+    def _stop_ai_now(self):
+        """Hard stop — immediately signals all workers to abort."""
+        self.ai_stop_flag=True
+        self._ai_paused=False
+        self.set_status("■  Stopped",RED_BTN)
+
+    def _retry_failed(self):
+        failed=[p for p in self._all_paths if self._results.get(p,{}).get("status")=="failed"]
+        if not failed or self.ai_running: return
+        for p in failed: self._results[p]={"status":"waiting"}
+        self._retry_btn.pack_forget()
+        self.start_generate()
 
     def _reset_defaults(self):
         for var,sl,val in [(self.ai_title_var,self._title_sl,130),
@@ -1282,6 +1415,7 @@ class App(DnDCTk):
             "kw_count":min(int(self.ai_kw_var.get() or 49),49),
             "prompt_words":int(self.ai_words_var.get() or 60),
             "single_keywords":self.ai_single_kw_var.get(),
+            "avoid_copyright":self.ai_avoid_copyright_var.get(),
             "concurrency":int(self.ai_concurrency_var.get()),
             "prefix_text":self.ai_prefix_text_var.get(),
             "suffix_text":self.ai_suffix_text_var.get(),
@@ -1320,17 +1454,26 @@ class App(DnDCTk):
         plat_f=ctk.CTkFrame(topbar,fg_color=BG2,corner_radius=0)
         plat_f.grid(row=0,column=0,sticky="w",padx=8,pady=8)
         self._plat_btns={}
+        plat_scroll=ctk.CTkScrollableFrame(plat_f,fg_color="transparent",
+            height=34,orientation="horizontal",
+            scrollbar_button_color=BG3,scrollbar_button_hover_color=BG4)
+        plat_scroll.pack(fill="x",expand=True)
+        self._plat_btns={}
+        first_plat=list(PLATFORM_RULES.keys())[0]
+        self._cur_platform=getattr(self,"_cur_platform","Adobe Stock")
         for plat in PLATFORM_RULES:
-            short=plat.replace(" Stock","").replace(" Images","")[:8]
-            btn=ctk.CTkButton(plat_f,text=short,width=80,height=30,
+            short=plat.replace(" Stock","").replace(" Images","")
+            is_sel=(plat==self._cur_platform)
+            btn=ctk.CTkButton(plat_scroll,text=short,width=max(70,len(short)*8),height=28,
                 font=ctk.CTkFont("Segoe UI",10,"bold"),
-                fg_color=GRN if plat=="Adobe Stock" else BG3,
+                fg_color=GRN if is_sel else BG3,
                 hover_color=GRN_H,
-                text_color=ABSOLUTE_BG if plat=="Adobe Stock" else TXT2,
+                text_color=ABSOLUTE_BG if is_sel else TXT2,
                 border_width=1,
-                border_color=GRN if plat=="Adobe Stock" else GLASS_BDR,
+                border_color=GRN if is_sel else GLASS_BDR,
                 corner_radius=6,command=lambda p=plat:self._sel_platform(p))
-            btn.pack(side="left",padx=(0,3)); self._plat_btns[plat]=btn
+            btn.pack(side="left",padx=(0,3))
+            self._plat_btns[plat]=btn
 
         btn_f=ctk.CTkFrame(topbar,fg_color=BG2,corner_radius=0)
         btn_f.grid(row=0,column=1,padx=8,pady=8,sticky="e")
@@ -1339,12 +1482,23 @@ class App(DnDCTk):
             fg_color=RED_DIM,hover_color=RED_BTN_H,text_color=RED_BTN,
             border_width=1,border_color=RED_BTN,corner_radius=8,
             command=lambda:self._clear_all(confirm=True)).pack(side="left",padx=(0,6))
+        # Pause and Stop — hidden initially, shown only during generation
         self._pause_btn=ctk.CTkButton(btn_f,text="⏸  Pause",width=90,height=32,
             font=ctk.CTkFont("Segoe UI",11,"bold"),
             fg_color=AMB_DIM,hover_color=AMB_BTN_H,text_color=AMB_BTN,
             border_width=1,border_color=AMB_BTN,corner_radius=8,
-            command=self._stop_ai)
-        self._pause_btn.pack(side="left",padx=(0,6))
+            command=self._pause_ai)
+        self._stop_btn=ctk.CTkButton(btn_f,text="■  Stop",width=86,height=32,
+            font=ctk.CTkFont("Segoe UI",11,"bold"),
+            fg_color=RED_DIM,hover_color=RED_BTN_H,text_color=RED_BTN,
+            border_width=1,border_color=RED_BTN,corner_radius=8,
+            command=self._stop_ai_now)
+        # Retry Failed — hidden until there are failures
+        self._retry_btn=ctk.CTkButton(btn_f,text="↺  Retry Failed",width=120,height=32,
+            font=ctk.CTkFont("Segoe UI",11,"bold"),
+            fg_color=AMB_DIM,hover_color=AMB_BTN_H,text_color=AMB_BTN,
+            border_width=1,border_color=AMB_BTN,corner_radius=8,
+            command=self._retry_failed)
         self._gen_btn=ctk.CTkButton(btn_f,text="✨  Generate (0)",width=165,height=32,
             font=ctk.CTkFont("Segoe UI",12,"bold"),
             fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,corner_radius=8,
@@ -1356,12 +1510,8 @@ class App(DnDCTk):
             border_width=1,border_color=GLASS_BDR,corner_radius=8,
             command=self._export_csv)
         self._export_btn.pack(side="left",padx=(0,6))
-        self._zip_btn=ctk.CTkButton(btn_f,text="📦  Download ZIP",width=140,height=32,
-            font=ctk.CTkFont("Segoe UI",11,"bold"),
-            fg_color=BG3,hover_color=BG4,text_color=TXT2,
-            border_width=1,border_color=GLASS_BDR,corner_radius=8,
-            command=self._download_zip)
-        self._zip_btn.pack(side="left")
+        self._ai_paused=False
+# ZIP button removed per request
 
         # UPLOAD WORKSPACE — vertically compact, thumbnail grid
         ws=ctk.CTkFrame(main,fg_color=GLASS,corner_radius=12,
@@ -1383,11 +1533,10 @@ class App(DnDCTk):
         self._thumb_grid=self._thumb_scroll
 
         self._ws_empty=ctk.CTkLabel(self._thumb_scroll,
-            text="🖼️  🎬  ✦     Drag & drop or click to browse"
-                 "\nJPG  PNG  GIF  WEBP  TIFF  SVG  EPS  MP4  MOV",
-            font=ctk.CTkFont("Segoe UI",11,"bold"),
-            text_color=TXT3,fg_color=BG3,justify="center")
-        self._ws_empty.pack(expand=True,fill="both",padx=20,pady=12)
+            text="BROWSE\n\n🖼️   🎬   ✦\n\nDrag & drop files here or click to browse\nJPG · PNG · GIF · WEBP · TIFF · SVG · EPS · MP4 · MOV",
+            font=ctk.CTkFont("Segoe UI",13,"bold"),
+            text_color=TXT2,fg_color=BG3,justify="center",anchor="center")
+        self._ws_empty.pack(expand=True,fill="both")
 
         # Bind clicks to browse on all ws surfaces
         for w in (ws,self._thumb_scroll,self._ws_empty):
@@ -1448,6 +1597,7 @@ class App(DnDCTk):
         self._gen_empty_lbl.grid(row=0,column=0,pady=40)
 
     def _sel_platform(self,plat):
+        self._cur_platform=plat
         rules=PLATFORM_RULES.get(plat,{})
         kw_val=min(rules.get("kw",49),49)
         for var,sl,val in [(self.ai_title_var,self._title_sl,rules.get("title",130)),
@@ -1464,11 +1614,14 @@ class App(DnDCTk):
 
     # ── DnD ────────────────────────────────────────────────────────
     def _on_drag_enter(self,event):
-        self._ws_empty.configure(text_color=GRN)
-        self._thumb_scroll.configure(fg_color=GRN_DIM); return event.action
+        # Only highlight the outer frame — don't touch label bg to avoid black box artifact
+        self._thumb_scroll.configure(fg_color=GRN_DIM)
+        self._ws_empty.configure(text_color=GRN,fg_color=GRN_DIM)
+        return event.action
     def _on_drag_leave(self,event):
-        self._ws_empty.configure(text_color=TXT3)
-        self._thumb_scroll.configure(fg_color=BG3); return event.action
+        self._thumb_scroll.configure(fg_color=BG3)
+        self._ws_empty.configure(text_color=TXT2,fg_color=BG3)
+        return event.action
     def _on_drop(self,event):
         self._on_drag_leave(event)
         raw=event.data
@@ -1588,7 +1741,7 @@ class App(DnDCTk):
             self._gen_empty_lbl.grid_remove()
         res=self._results.get(path,{})
         idx=len(self._result_cards)
-        card=MetaResultCard(self._gen_scroll,path,res,on_redo=lambda p=path:self._redo_single(p))
+        card=MetaResultCard(self._gen_scroll,path,res,on_redo=lambda p=path:self._redo_single(p),mode=self.current_mode)
         card.grid(row=idx,column=0,sticky="ew",padx=4,pady=(0,6))
         self._result_cards.append(card)
         done=sum(1 for r in self._results.values() if r.get("status")=="done")
@@ -1602,21 +1755,24 @@ class App(DnDCTk):
         if not self._all_paths: messagebox.showerror("No Images","Add images first."); return
         if not get_active_keys(self.prefs):
             messagebox.showerror("No API Keys","Open 'API Configuration'."); return
-        self.ai_running=True; self.ai_stop_flag=False
+        self.ai_running=True; self.ai_stop_flag=False; self._ai_paused=False
         self._gen_btn.configure(state="disabled",text="⟳  Generating…")
+        # Show pause/stop, hide retry
+        self._pause_btn.pack(side="left",padx=(0,4),before=self._gen_btn)
+        self._stop_btn.pack(side="left",padx=(0,6),before=self._gen_btn)
+        try: self._retry_btn.pack_forget()
+        except: pass
         targets=[p for p in self._all_paths
                  if self._results.get(p,{}).get("status") in ("waiting","failed")]
         for p in targets: self._results[p]={"status":"waiting"}
         self._rebuild_thumb_grid()
         threading.Thread(target=self._gen_thread,args=(targets,),daemon=True).start()
 
-    def _stop_ai(self):
-        self.ai_stop_flag=True; self.set_status("■  Stopping…",AMB_BTN)
-
     def _gen_thread(self,targets):
         mode=self.current_mode
         custom=self.ai_custom_var.get()
         single_kw=self.ai_single_kw_var.get()
+        avoid_copyright=self.ai_avoid_copyright_var.get()
         themes=", ".join(s for s,v in self._style_vars.items() if v.get())
         prefix=(self.ai_prefix_text_var.get().strip()
                 if self.ai_prefix_on_var.get() else "")
@@ -1628,7 +1784,7 @@ class App(DnDCTk):
             tc=int(self.ai_title_var.get() or 130)
             dc=int(self.ai_desc_var.get() or 200)
             kn=min(int(self.ai_kw_var.get() or 49),49)
-            prompt=build_meta_prompt(tc,dc,kn,custom,single_kw,themes,prefix,suffix_title)
+            prompt=build_meta_prompt(tc,dc,kn,custom,single_kw,themes,prefix,suffix_title,avoid_copyright)
         else:
             mw=int(self.ai_words_var.get() or 60)
             prompt=build_prompt_prompt(mw,list(self._style_vars.keys()),custom)
@@ -1642,6 +1798,9 @@ class App(DnDCTk):
         def process_one(path,i):
             nonlocal done_count
             try:
+                # Wait while paused
+                while getattr(self,"_ai_paused",False) and not self.ai_stop_flag:
+                    import time; time.sleep(0.3)
                 if self.ai_stop_flag: return
                 fname=os.path.basename(path)
                 self._results[path]={"status":"working"}
@@ -1668,6 +1827,8 @@ class App(DnDCTk):
                         # Trim to char limit
                         if len(title)>tc: title=title[:tc].rsplit(" ",1)[0]
                         if single_kw: kw=enforce_single_keywords(kw)
+                        if avoid_copyright:
+                            kw=_strip_copyright_keywords(kw)
                         self._results[path]={
                             "status":"done","title":title,"desc":desc,
                             "kw":kw,"model_used":model_used}
@@ -1700,11 +1861,20 @@ class App(DnDCTk):
         self.after(0,self._gen_done)
 
     def _gen_done(self):
-        self.ai_running=False
+        self.ai_running=False; self._ai_paused=False
         total=len(self._all_paths)
         done=sum(1 for r in self._results.values() if r.get("status")=="done")
         failed=sum(1 for r in self._results.values() if r.get("status")=="failed")
         self._gen_btn.configure(state="normal",text=f"✨  Generate ({total})")
+        # Hide pause/stop
+        try: self._pause_btn.pack_forget()
+        except: pass
+        try: self._stop_btn.pack_forget()
+        except: pass
+        self._pause_btn.configure(text="⏸  Pause",fg_color=AMB_DIM,text_color=AMB_BTN)
+        # Show retry if failures
+        if failed>0:
+            self._retry_btn.pack(side="left",padx=(0,6),before=self._gen_btn)
         self.set_status(f"● Done — {done} generated · {failed} failed",
                         GRN if failed==0 else AMB_BTN)
         self._update_progress(done=done,total=total)
