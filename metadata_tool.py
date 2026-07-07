@@ -553,57 +553,30 @@ def enforce_single_keywords(kw_string):
 
 # Common brand/trademark fragments to filter from keywords when avoid_copyright is on.
 # This is a post-processing safety net — the main enforcement is in the prompt itself.
-_COPYRIGHT_FRAGMENTS = {
-    "adobe","shutterstock","getty","istock","freepik","vecteezy","alamy","pond5",
-    "nike","adidas","apple","google","microsoft","amazon","facebook","meta","instagram",
-    "twitter","youtube","netflix","disney","marvel","dc","warner","sony","samsung",
-    "coca","pepsi","mcdonalds","starbucks","gucci","louis","vuitton","prada","chanel",
-    "rolex","ferrari","bmw","mercedes","tesla","ford","toyota","honda","nikon","canon",
-    "playstation","xbox","nintendo","lego","barbie","superman","batman","spiderman",
-}
-
-def _strip_copyright_keywords(kw_string):
-    """Remove keywords that contain known brand/copyright fragments."""
-    raw = [k.strip() for k in kw_string.split(",") if k.strip()]
-    clean = []
-    for kw in raw:
-        kw_lower = kw.lower().replace(" ","").replace("-","")
-        if not any(frag in kw_lower for frag in _COPYRIGHT_FRAGMENTS):
-            clean.append(kw)
-    return ", ".join(clean)
-
-
-def make_thumb(path, size=(120,85)):
-    try:
-        ext = os.path.splitext(path)[1].lower()
-        if ext in VECTOR_EXTS or ext in VIDEO_EXTS: return None
-        img = Image.open(path).convert("RGB")
-        img.thumbnail(size, Image.LANCZOS)
-        return ctk.CTkImage(img, size=img.size)
-    except: return None
-
-
-def check_online():
-    try:
-        socket.setdefaulttimeout(3)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8",53))
-        return True
-    except: return False
-
 
 # ══════════════════════════════════════════════════════════════════════
-#  PALETTE  —  Black Glassmorphic
+#  PALETTE — Black Glassmorphic
 # ══════════════════════════════════════════════════════════════════════
 BG1="#0a0a0a"; BG2="#111111"; BG3="#1a1a1a"; BG4="#222222"
 GLASS="#161616"; GLASS_BDR="#2a2a2a"; GLASS_BDR_AC="#00c853"
-TXT="#f0f0f0"; TXT2="#a0a0a0"; TXT3="#606060"
+TXT="#f0f0f0"; TXT2="#a0a0a0"; TXT3="#505050"
 GRN="#00c853"; GRN_H="#00a040"; GRN_DIM="#00331a"
 RED_BTN="#e53935"; RED_BTN_H="#b71c1c"; RED_DIM="#2a0000"
 AMB_BTN="#f9a825"; AMB_BTN_H="#c67c00"; AMB_DIM="#2a1a00"
-CYAN="#00e5ff"; LOG_BG="#050505"
-ABSOLUTE_BG="#000000"
+CYAN="#00e5ff"; LOG_BG="#050505"; ABSOLUTE_BG="#000000"
+
 AI_PROVIDERS_ORDERED=["Gemini","Mistral","Groq","OpenAI","Claude","OpenRouter"]
 
+PLATFORM_RULES = {
+    "General":      {"kw":49,"title":150,"desc":250},
+    "Adobe Stock":  {"kw":49,"title":150,"desc":250},
+    "Shutterstock": {"kw":50,"title":200,"desc":200},
+    "Getty Images": {"kw":50,"title":200,"desc":500},
+    "Freepik":      {"kw":30,"title":150,"desc":200},
+    "Pond5":        {"kw":50,"title":200,"desc":500},
+    "iStock":       {"kw":50,"title":200,"desc":200},
+    "Vecteezy":     {"kw":50,"title":200,"desc":200},
+}
 
 # ══════════════════════════════════════════════════════════════════════
 #  API KEY MANAGER
@@ -624,7 +597,7 @@ class APIManagerWindow(ctk.CTkToplevel):
 
     def _tab_text(self,p):
         n=sum(1 for k in self.prefs.get("ai_keys",{}).get(p,[]) if k.get("active"))
-        return p+(f"  ●{n}" if n else "")
+        return p+(f" ●{n}" if n else "")
 
     def _build(self):
         self.grid_columnconfigure(0,weight=1); self.grid_rowconfigure(2,weight=1)
@@ -637,7 +610,6 @@ class APIManagerWindow(ctk.CTkToplevel):
         ctk.CTkButton(hdr,text="✕",width=34,height=34,fg_color="transparent",
             hover_color=RED_DIM,text_color=TXT3,corner_radius=6,command=self._done
         ).grid(row=0,column=1,padx=10)
-
         tab_bar=ctk.CTkFrame(self,fg_color=BG2,corner_radius=0,height=50)
         tab_bar.grid(row=1,column=0,sticky="ew"); tab_bar.grid_propagate(False)
         self._tabs={}
@@ -645,12 +617,10 @@ class APIManagerWindow(ctk.CTkToplevel):
             btn=ctk.CTkButton(tab_bar,text=self._tab_text(p),width=116,height=34,
                 font=ctk.CTkFont("Segoe UI",11,"bold"),
                 fg_color=GRN if p==self._cur else BG3,
-                hover_color=GRN_H if p==self._cur else BG4,
-                text_color=ABSOLUTE_BG if p==self._cur else TXT2,corner_radius=8,
-                command=lambda pv=p:self._switch(pv))
-            btn.pack(side="left",padx=(10 if p==AI_PROVIDERS_ORDERED[0] else 3,0),pady=8)
+                hover_color=GRN_H,text_color=ABSOLUTE_BG if p==self._cur else TXT2,
+                corner_radius=8,command=lambda pv=p:self._switch(pv))
+            btn.pack(side="left",padx=(8 if p==AI_PROVIDERS_ORDERED[0] else 3,0),pady=8)
             self._tabs[p]=btn
-
         body=ctk.CTkFrame(self,fg_color=BG1,corner_radius=0)
         body.grid(row=2,column=0,sticky="nsew")
         body.grid_columnconfigure(0,weight=0); body.grid_columnconfigure(1,weight=1)
@@ -660,7 +630,6 @@ class APIManagerWindow(ctk.CTkToplevel):
         self._rp=ctk.CTkFrame(body,fg_color=BG1,corner_radius=0)
         self._rp.grid(row=0,column=1,sticky="nsew",padx=(1,0))
         self._rp.grid_columnconfigure(0,weight=1); self._rp.grid_rowconfigure(1,weight=1)
-
         ftr=ctk.CTkFrame(self,fg_color=BG2,corner_radius=0,height=52)
         ftr.grid(row=3,column=0,sticky="ew"); ftr.grid_propagate(False)
         ctk.CTkButton(ftr,text="Done",width=100,height=34,
@@ -673,9 +642,9 @@ class APIManagerWindow(ctk.CTkToplevel):
         self._cur=p
         for pv,btn in self._tabs.items():
             s=(pv==p)
-            btn.configure(text=self._tab_text(pv),
-                fg_color=GRN if s else BG3,hover_color=GRN_H if s else BG4,
-                text_color=ABSOLUTE_BG if s else TXT2)
+            btn.configure(fg_color=GRN if s else BG3,
+                text_color=ABSOLUTE_BG if s else TXT2,
+                text=self._tab_text(pv))
         self._render()
 
     def _render(self):
@@ -685,11 +654,9 @@ class APIManagerWindow(ctk.CTkToplevel):
         keys=self.prefs.setdefault("ai_keys",{}).setdefault(p,[])
         models=cfg["models"]
         cur_id=self.prefs.setdefault("ai_models",{}).get(p,models[0][1])
-
         inner=ctk.CTkScrollableFrame(self._lp,fg_color=BG2,scrollbar_button_color=BG3,corner_radius=0)
         inner.place(relx=0,rely=0,relwidth=1,relheight=1)
         inner.grid_columnconfigure(0,weight=1)
-
         ctk.CTkLabel(inner,text="CONFIGURATION",font=ctk.CTkFont("Segoe UI",10,"bold"),
             text_color=GRN,fg_color=BG2).pack(anchor="w",padx=18,pady=(16,8))
         ctk.CTkLabel(inner,text="Model Selection",font=ctk.CTkFont("Segoe UI",12),
@@ -701,7 +668,6 @@ class APIManagerWindow(ctk.CTkToplevel):
             dropdown_text_color=TXT,dropdown_hover_color=BG4,corner_radius=8,height=40,
             command=lambda v:self._save_model(p,v)).pack(fill="x",padx=18,pady=(0,16))
         ctk.CTkFrame(inner,fg_color=GLASS_BDR,height=1,corner_radius=0).pack(fill="x")
-
         ctk.CTkLabel(inner,text="Add New API Key",font=ctk.CTkFont("Segoe UI",12),
             text_color=TXT2,fg_color=BG2).pack(anchor="w",padx=18,pady=(14,4))
         nkv=StringVar()
@@ -711,16 +677,13 @@ class APIManagerWindow(ctk.CTkToplevel):
             font=ctk.CTkFont("Segoe UI",12),fg_color=BG3,text_color=TXT,
             border_color=GLASS_BDR,corner_radius=8,height=40)
         entry.grid(row=0,column=0,sticky="ew")
-        vld_lbl=ctk.CTkLabel(inner,text="",font=ctk.CTkFont("Segoe UI",11),
-            text_color=TXT3,fg_color=BG2)
-
+        vld_lbl=ctk.CTkLabel(inner,text="",font=ctk.CTkFont("Segoe UI",11),text_color=TXT3,fg_color=BG2)
         ctk.CTkButton(er,text="Save",width=76,height=40,
-            font=ctk.CTkFont("Segoe UI",12,"bold"),
-            fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,corner_radius=8,
+            font=ctk.CTkFont("Segoe UI",12,"bold"),fg_color=GRN,hover_color=GRN_H,
+            text_color=ABSOLUTE_BG,corner_radius=8,
             command=lambda:self._add_key(p,nkv.get().strip(),vld_lbl)
         ).grid(row=0,column=1,padx=(8,0))
         vld_lbl.pack(anchor="w",padx=18,pady=(2,10))
-
         def _live_validate(e=None):
             kv=nkv.get().strip()
             if len(kv)<8: vld_lbl.configure(text="",text_color=TXT3); return
@@ -728,18 +691,14 @@ class APIManagerWindow(ctk.CTkToplevel):
             def _run():
                 ok,msg=validate_key(p,kv)
                 self.after(0,lambda:vld_lbl.configure(
-                    text="✓  Valid" if ok else f"✗  {msg}",
-                    text_color=GRN if ok else RED_BTN))
+                    text="✓  Valid" if ok else f"✗  {msg}",text_color=GRN if ok else RED_BTN))
             threading.Thread(target=_run,daemon=True).start()
-        entry.bind("<FocusOut>",_live_validate)
-        entry.bind("<Return>",_live_validate)
-
+        entry.bind("<FocusOut>",_live_validate); entry.bind("<Return>",_live_validate)
         ctk.CTkButton(inner,text=f"🔑  Get API Key from {p}",height=38,
             font=ctk.CTkFont("Segoe UI",11),fg_color=BG3,hover_color=BG4,text_color=TXT2,
             border_width=1,border_color=GLASS_BDR,corner_radius=8,
             command=lambda:self._open_url(cfg["key_url"])).pack(fill="x",padx=18,pady=(0,18))
-
-        # RIGHT: stored keys — show ALL
+        # RIGHT
         ctk.CTkLabel(self._rp,text="STORED KEYS",font=ctk.CTkFont("Segoe UI",10,"bold"),
             text_color=TXT2,fg_color=BG1).pack(anchor="w",padx=16,pady=(16,8))
         ks=ctk.CTkScrollableFrame(self._rp,fg_color=BG1,corner_radius=0,scrollbar_button_color=BG3)
@@ -747,19 +706,16 @@ class APIManagerWindow(ctk.CTkToplevel):
         if not keys:
             ctk.CTkLabel(ks,text="No keys saved yet.",font=ctk.CTkFont("Segoe UI",12),
                 text_color=TXT3,fg_color=BG1).pack(pady=30); return
-        for i,k in enumerate(keys):
-            self._key_card(ks,p,i,k)
+        for i,k in enumerate(keys): self._key_card(ks,p,i,k)
 
     def _key_card(self,parent,prov,idx,k):
         is_active=k.get("active",False); kv=k.get("key","")
         key_disp="..."+kv[-10:] if len(kv)>10 else kv
-        bdr=GLASS_BDR_AC if is_active else GLASS_BDR
         card=ctk.CTkFrame(parent,fg_color="#0a1a0a" if is_active else BG3,
-            corner_radius=10,border_width=1,border_color=bdr)
+            corner_radius=10,border_width=1,border_color=GLASS_BDR_AC if is_active else GLASS_BDR)
         card.pack(fill="x",padx=12,pady=(0,8)); card.grid_columnconfigure(1,weight=1)
         ctk.CTkLabel(card,text="🔑",font=ctk.CTkFont("Segoe UI",14),
-            fg_color="transparent",text_color=TXT2
-        ).grid(row=0,column=0,padx=(12,8),pady=(10,4),sticky="w")
+            fg_color="transparent",text_color=TXT2).grid(row=0,column=0,padx=(12,8),pady=(10,4),sticky="w")
         kf=ctk.CTkFrame(card,fg_color="transparent",corner_radius=0)
         kf.grid(row=0,column=1,sticky="ew",pady=(10,4))
         ctk.CTkLabel(kf,text=key_disp,font=ctk.CTkFont("Consolas",12,"bold"),
@@ -770,22 +726,23 @@ class APIManagerWindow(ctk.CTkToplevel):
             ).grid(row=0,column=2,padx=(0,10),pady=(10,4),sticky="e")
         af=ctk.CTkFrame(card,fg_color="transparent",corner_radius=0)
         af.grid(row=1,column=0,columnspan=3,sticky="ew",padx=10,pady=(0,8))
-        ctk.CTkButton(af,text="👁",width=34,height=28,fg_color="transparent",
-            hover_color=BG4,text_color=TXT3,corner_radius=6,
+        ctk.CTkButton(af,text="👁",width=34,height=28,fg_color="transparent",hover_color=BG4,
+            text_color=TXT3,corner_radius=6,
             command=lambda kv2=kv,lb=kf:self._toggle_show(kv2,lb)).pack(side="left",padx=(0,4))
-        ctk.CTkButton(af,text="⧉",width=34,height=28,fg_color="transparent",
-            hover_color=BG4,text_color=TXT3,corner_radius=6,
+        ctk.CTkButton(af,text="⧉",width=34,height=28,fg_color="transparent",hover_color=BG4,
+            text_color=TXT3,corner_radius=6,
             command=lambda kv2=kv:self._copy(kv2)).pack(side="left",padx=(0,4))
         vl=ctk.CTkLabel(af,text="? Test",font=ctk.CTkFont("Segoe UI",10,"bold"),
             text_color=TXT3,fg_color=BG4,corner_radius=6,padx=8,pady=4,cursor="hand2")
         vl.pack(side="left",padx=(0,4))
-        vl.bind("<Button-1>",lambda e,kv2=kv,lb=vl:(
-            lb.configure(text="⟳…",text_color=AMB_BTN),
-            threading.Thread(target=lambda:
-                self.after(0,lambda:lb.configure(
-                    **({"text":"✓ OK","text_color":GRN} if validate_key(prov,kv2)[0]
-                       else {"text":"✗ Bad","text_color":RED_BTN}))),
-            daemon=True).start()))
+        def _test(e=None,kv2=kv,lb=vl):
+            lb.configure(text="⟳…",text_color=AMB_BTN)
+            def _r():
+                ok,msg=validate_key(prov,kv2)
+                self.after(0,lambda:lb.configure(text="✓ OK" if ok else "✗ Bad",
+                    text_color=GRN if ok else RED_BTN))
+            threading.Thread(target=_r,daemon=True).start()
+        vl.bind("<Button-1>",_test)
         if not is_active:
             ctk.CTkButton(af,text="Activate",width=84,height=28,
                 font=ctk.CTkFont("Segoe UI",10,"bold"),fg_color=BG4,hover_color=GRN_DIM,
@@ -796,7 +753,6 @@ class APIManagerWindow(ctk.CTkToplevel):
                 font=ctk.CTkFont("Segoe UI",10,"bold"),fg_color=BG4,hover_color=RED_DIM,
                 text_color=TXT2,border_width=1,border_color=GLASS_BDR,corner_radius=6,
                 command=lambda i=idx:self._deactivate(prov,i)).pack(side="left",padx=(0,4))
-        # DELETE button — always visible
         ctk.CTkButton(af,text="🗑",width=34,height=28,fg_color="transparent",
             hover_color=RED_DIM,text_color=TXT3,corner_radius=6,
             command=lambda i=idx:self._del(prov,i)).pack(side="right")
@@ -807,28 +763,20 @@ class APIManagerWindow(ctk.CTkToplevel):
             short="..."+kv[-10:] if len(kv)>10 else kv
             ch[0].configure(text=kv if ch[0].cget("text")==short else short)
     def _copy(self,kv): self.clipboard_clear(); self.clipboard_append(kv)
-    def _activate(self,p,i):
-        self.prefs["ai_keys"][p][i]["active"]=True; save_prefs(self.prefs); self._refresh(); self._render()
-    def _deactivate(self,p,i):
-        self.prefs["ai_keys"][p][i]["active"]=False; save_prefs(self.prefs); self._refresh(); self._render()
+    def _activate(self,p,i): self.prefs["ai_keys"][p][i]["active"]=True; save_prefs(self.prefs); self._switch(p)
+    def _deactivate(self,p,i): self.prefs["ai_keys"][p][i]["active"]=False; save_prefs(self.prefs); self._switch(p)
     def _del(self,p,i):
         if not messagebox.askyesno("Delete","Delete this key?",parent=self): return
-        self.prefs["ai_keys"][p].pop(i); save_prefs(self.prefs); self._refresh(); self._render()
+        self.prefs["ai_keys"][p].pop(i); save_prefs(self.prefs); self._switch(p)
     def _add_key(self,p,key,vld_lbl=None):
         if not key: messagebox.showwarning("Empty","Paste a key first.",parent=self); return
         keys=self.prefs["ai_keys"][p]
-        if any(k["key"]==key for k in keys):
-            messagebox.showinfo("Duplicate","Already saved.",parent=self); return
+        if any(k["key"]==key for k in keys): messagebox.showinfo("Duplicate","Already saved.",parent=self); return
         for k in keys: k["active"]=False
         keys.append({"key":key,"active":True})
-        save_prefs(self.prefs); self._refresh(); self._render()
+        save_prefs(self.prefs); self._switch(p)
     def _save_model(self,p,label):
         self.prefs.setdefault("ai_models",{})[p]=model_id_from_label(p,label); save_prefs(self.prefs)
-    def _refresh(self):
-        for pv,btn in self._tabs.items():
-            s=(pv==self._cur)
-            btn.configure(text=self._tab_text(pv),fg_color=GRN if s else BG3,
-                text_color=ABSOLUTE_BG if s else TXT2)
     def _open_url(self,url):
         import webbrowser; webbrowser.open(url)
     def _done(self):
@@ -837,152 +785,378 @@ class APIManagerWindow(ctk.CTkToplevel):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  RESULT CARD  (in Generated Metadata section)
+#  EMBED WINDOW (compact popup)
+# ══════════════════════════════════════════════════════════════════════
+class EmbedWindow(ctk.CTkToplevel):
+    def __init__(self,parent,csv_path=None):
+        super().__init__(parent); self.title("Embed Metadata")
+        self.configure(fg_color=BG1); self.resizable(True,True)
+        self.grab_set()
+        self.csv_rows=[]; self.csv_headers=[]; self.embed_running=False
+        self.csv_path_var=StringVar(); self.folder_path_var=StringVar()
+        self.col_file_var=StringVar(value="(skip)"); self.col_title_var=StringVar(value="(skip)")
+        self.col_kw_var=StringVar(value="(skip)"); self.col_desc_var=StringVar(value="(skip)")
+        self.match_only_var=BooleanVar(value=True); self.subfolder_var=BooleanVar(value=True)
+        self.rm_prog_var=BooleanVar(value=True); self.rm_copy_var=BooleanVar(value=True)
+        self._build()
+        self._center(680,560)
+        self.protocol("WM_DELETE_WINDOW",self.destroy)
+        if csv_path: self._do_load_csv(csv_path)
+
+    def _center(self,w,h):
+        self.update_idletasks()
+        x=self.master.winfo_x()+(self.master.winfo_width()-w)//2
+        y=self.master.winfo_y()+(self.master.winfo_height()-h)//2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _build(self):
+        self.grid_columnconfigure(0,weight=1); self.grid_rowconfigure(1,weight=1)
+        # Header
+        hdr=ctk.CTkFrame(self,fg_color=BG2,corner_radius=0,height=50)
+        hdr.grid(row=0,column=0,sticky="ew"); hdr.grid_propagate(False)
+        hdr.grid_columnconfigure(0,weight=1)
+        ctk.CTkLabel(hdr,text="📋  Embed Metadata",
+            font=ctk.CTkFont("Segoe UI",14,"bold"),text_color=TXT,fg_color=BG2
+        ).grid(row=0,column=0,sticky="w",padx=16,pady=13)
+        ctk.CTkButton(hdr,text="✕",width=32,height=32,fg_color="transparent",
+            hover_color=RED_DIM,text_color=TXT3,corner_radius=6,
+            command=self.destroy).grid(row=0,column=1,padx=10)
+
+        # Body
+        body=ctk.CTkFrame(self,fg_color=BG1,corner_radius=0)
+        body.grid(row=1,column=0,sticky="nsew",padx=12,pady=12)
+        body.grid_columnconfigure(0,weight=1)
+
+        # 1. CSV row
+        r1=self._section(body,"1","Load CSV",self._load_csv,0)
+        self.csv_status=ctk.CTkLabel(r1,text="No CSV loaded",
+            font=ctk.CTkFont("Segoe UI",10),text_color=TXT3,fg_color=BG3,
+            corner_radius=8,padx=8,pady=2)
+        self.csv_status.pack(side="left",padx=(8,0))
+
+        # 2. Folder row
+        r2=self._section(body,"2","Image Folder",self._browse_folder,1)
+        self.folder_status=ctk.CTkLabel(r2,text="No folder selected",
+            font=ctk.CTkFont("Segoe UI",10),text_color=TXT3,fg_color=BG3,
+            corner_radius=8,padx=8,pady=2)
+        self.folder_status.pack(side="left",padx=(8,0))
+
+        # Column map (compact 2x2)
+        cmap=ctk.CTkFrame(body,fg_color=GLASS,corner_radius=10,border_width=1,border_color=GLASS_BDR)
+        cmap.grid(row=2,column=0,sticky="ew",pady=(0,8))
+        cmap.grid_columnconfigure(0,weight=1); cmap.grid_columnconfigure(1,weight=1)
+        self.col_combos={}
+        fields=[("Filename",self.col_file_var),("Title",self.col_title_var),
+                ("Keywords",self.col_kw_var),("Description",self.col_desc_var)]
+        for i,(lbl,var) in enumerate(fields):
+            r,c=i//2,i%2
+            cell=ctk.CTkFrame(cmap,fg_color="transparent",corner_radius=0)
+            cell.grid(row=r,column=c,sticky="ew",padx=(8 if c==0 else 4,4 if c==0 else 8),pady=4)
+            cell.grid_columnconfigure(0,weight=1)
+            ctk.CTkLabel(cell,text=lbl.upper(),font=ctk.CTkFont("Segoe UI",9,"bold"),
+                text_color=TXT3,fg_color="transparent").pack(anchor="w")
+            cb=ctk.CTkComboBox(cell,variable=var,values=["(skip)"],state="readonly",
+                font=ctk.CTkFont("Segoe UI",11),fg_color=BG3,text_color=TXT,
+                border_color=GLASS_BDR,button_color=GRN,button_hover_color=GRN_H,
+                dropdown_fg_color=BG3,dropdown_text_color=TXT,dropdown_hover_color=BG4,
+                corner_radius=8,height=34,command=lambda v:None)
+            cb.pack(fill="x",pady=(2,0)); self.col_combos[lbl]=cb
+
+        # 4 toggles in 2x2 grid
+        opts=ctk.CTkFrame(body,fg_color=GLASS,corner_radius=10,border_width=1,border_color=GLASS_BDR)
+        opts.grid(row=3,column=0,sticky="ew",pady=(0,8))
+        opts.grid_columnconfigure(0,weight=1); opts.grid_columnconfigure(1,weight=1)
+        toggles=[
+            ("Match Filename Only",self.match_only_var),
+            ("Include Sub-Folders",self.subfolder_var),
+            ("Remove Program Name",self.rm_prog_var),
+            ("Remove Copyright",self.rm_copy_var),
+        ]
+        for i,(lbl,var) in enumerate(toggles):
+            r,c=i//2,i%2
+            tf=ctk.CTkFrame(opts,fg_color="transparent",corner_radius=0)
+            tf.grid(row=r,column=c,sticky="ew",padx=10,pady=6)
+            tf.grid_columnconfigure(0,weight=1)
+            ctk.CTkLabel(tf,text=lbl,font=ctk.CTkFont("Segoe UI",11),
+                text_color=TXT2,fg_color="transparent").grid(row=0,column=0,sticky="w")
+            ctk.CTkSwitch(tf,text="",variable=var,progress_color=GRN,button_color=TXT,
+                fg_color=GLASS_BDR,onvalue=True,offvalue=False,width=44,height=22
+            ).grid(row=0,column=1,sticky="e")
+
+        # Action + log
+        af=ctk.CTkFrame(body,fg_color="transparent",corner_radius=0)
+        af.grid(row=4,column=0,sticky="ew",pady=(0,8))
+        af.grid_columnconfigure(0,weight=1)
+        self._emb_btn=ctk.CTkButton(af,text="▶  Start Embedding",height=44,
+            font=ctk.CTkFont("Segoe UI",13,"bold"),
+            fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,corner_radius=22,
+            command=self._start)
+        self._emb_btn.grid(row=0,column=0,sticky="ew")
+        ctk.CTkButton(af,text="↺",width=44,height=44,
+            font=ctk.CTkFont("Segoe UI",18,"bold"),fg_color=RED_DIM,hover_color=RED_BTN_H,
+            text_color=RED_BTN,corner_radius=22,command=self._reset
+        ).grid(row=0,column=1,padx=(6,0))
+
+        self._log=ctk.CTkTextbox(body,height=120,font=ctk.CTkFont("Consolas",10),
+            fg_color=LOG_BG,text_color=TXT,corner_radius=8,state="disabled")
+        self._log.grid(row=5,column=0,sticky="ew")
+
+    def _section(self,parent,num,title,cmd,row):
+        f=ctk.CTkFrame(parent,fg_color=GLASS,corner_radius=10,border_width=1,border_color=GLASS_BDR)
+        f.grid(row=row,column=0,sticky="ew",pady=(0,8)); f.grid_columnconfigure(1,weight=1)
+        ctk.CTkLabel(f,text=num,font=ctk.CTkFont("Segoe UI",11,"bold"),
+            fg_color=GRN,text_color=ABSOLUTE_BG,corner_radius=50,width=28,height=28
+        ).grid(row=0,column=0,padx=(10,8),pady=8)
+        ctk.CTkLabel(f,text=title,font=ctk.CTkFont("Segoe UI",12,"bold"),
+            text_color=TXT2,fg_color="transparent").grid(row=0,column=1,sticky="w")
+        ctk.CTkButton(f,text="Browse",width=86,height=28,
+            font=ctk.CTkFont("Segoe UI",11,"bold"),fg_color=GRN,hover_color=GRN_H,
+            text_color=ABSOLUTE_BG,corner_radius=14,command=cmd
+        ).grid(row=0,column=2,padx=(0,10),pady=8)
+        return f
+
+    def _load_csv(self):
+        p=filedialog.askopenfilename(title="Select CSV",filetypes=[("CSV","*.csv"),("All","*.*")])
+        if p: self._do_load_csv(p)
+
+    def _do_load_csv(self,path):
+        try:
+            with open(path,newline='',encoding='utf-8-sig') as f:
+                reader=csv.DictReader(f)
+                self.csv_rows=list(reader); self.csv_headers=list(reader.fieldnames or [])
+            self.csv_path_var.set(path)
+            self.csv_status.configure(text=f"✓ {len(self.csv_rows)} rows",
+                fg_color=GRN_DIM,text_color=GRN)
+            self._update_combos(); self._log_msg(f"✓ CSV loaded — {len(self.csv_rows)} rows")
+        except Exception as e: messagebox.showerror("CSV Error",str(e),parent=self)
+
+    def _browse_folder(self):
+        p=filedialog.askdirectory(title="Select image folder",parent=self)
+        if p:
+            self.folder_path_var.set(p)
+            self.folder_status.configure(text=f"✓ {os.path.basename(p)}",
+                fg_color=GRN_DIM,text_color=GRN)
+
+    def _update_combos(self):
+        opts=["(skip)"]+self.csv_headers
+        hints={"Filename":["filename","file","name","image"],"Title":["title"],
+               "Keywords":["keyword","tag","kw"],"Description":["desc","caption","description"]}
+        vmap={"Filename":self.col_file_var,"Title":self.col_title_var,
+              "Keywords":self.col_kw_var,"Description":self.col_desc_var}
+        for lbl,cb in self.col_combos.items():
+            cb.configure(values=opts)
+            g=next((c for h in hints.get(lbl,[]) for c in self.csv_headers if h in c.lower()),"")
+            vmap[lbl].set(g or "(skip)")
+
+    def _log_msg(self,msg):
+        self._log.configure(state="normal")
+        self._log.insert("end",f"{msg}\n"); self._log.see("end")
+        self._log.configure(state="disabled")
+
+    def _reset(self):
+        self.csv_rows=[]; self.csv_headers=[]
+        self.csv_path_var.set(""); self.folder_path_var.set("")
+        self.csv_status.configure(text="No CSV loaded",fg_color=BG3,text_color=TXT3)
+        self.folder_status.configure(text="No folder selected",fg_color=BG3,text_color=TXT3)
+        for cb in self.col_combos.values(): cb.configure(values=["(skip)"]); cb.set("(skip)")
+        self._emb_btn.configure(state="normal",text="▶  Start Embedding")
+        self._log.configure(state="normal"); self._log.delete("1.0","end"); self._log.configure(state="disabled")
+
+    def _start(self):
+        if self.embed_running: return
+        et=find_exiftool()
+        if not et: messagebox.showerror("ExifTool","Place exiftool.exe next to this app.",parent=self); return
+        if not self.csv_rows: messagebox.showerror("No CSV","Load a CSV first.",parent=self); return
+        if not self.folder_path_var.get(): messagebox.showerror("No folder","Select folder.",parent=self); return
+        fc=self.col_file_var.get()
+        if not fc or fc=="(skip)": messagebox.showerror("Column","Select filename column.",parent=self); return
+        self.embed_running=True
+        self._emb_btn.configure(state="disabled",text="⟳  Processing…")
+        threading.Thread(target=self._embed_thread,args=(et,),daemon=True).start()
+
+    def _embed_thread(self,et):
+        folder=self.folder_path_var.get(); col_f=self.col_file_var.get()
+        col_t=self.col_title_var.get(); col_k=self.col_kw_var.get(); col_d=self.col_desc_var.get()
+        use_sub=self.subfolder_var.get(); use_ext=self.match_only_var.get()
+        rm_prog=self.rm_prog_var.get(); rm_copy=self.rm_copy_var.get()
+        total=len(self.csv_rows); ok=skipped=errors=0
+        finder=find_recursive if use_sub else find_file
+        self.after(0,lambda:self._log_msg(f"▶  Started — {total} rows"))
+        for i,row in enumerate(self.csv_rows):
+            fn=(row.get(col_f) or "").strip()
+            if not fn: skipped+=1; continue
+            fp=finder(folder,fn,use_ext)
+            if not fp: skipped+=1; self.after(0,lambda f=fn:self._log_msg(f"⚠  Not found: {f}")); continue
+            cmd=[et,'-overwrite_original','-codedcharacterset=UTF8']
+            title=(row.get(col_t) or "").strip() if col_t and col_t!="(skip)" else ""
+            kw_raw=(row.get(col_k) or "").strip() if col_k and col_k!="(skip)" else ""
+            desc=(row.get(col_d) or "").strip() if col_d and col_d!="(skip)" else ""
+            if title: cmd+=[f'-Title={title}',f'-ObjectName={title}',f'-Headline={title}']
+            if kw_raw:
+                for kw in [k.strip() for k in kw_raw.replace(';',',').split(',') if k.strip()]:
+                    cmd+=[f'-Keywords={kw}',f'-Subject={kw}']
+            if desc: cmd+=[f'-Description={desc}',f'-Caption-Abstract={desc}']
+            if rm_prog: cmd+=['-Software=','-CreatorTool=','-HistorySoftwareAgent=']
+            if rm_copy: cmd+=['-Rights=','-Copyright=','-CopyrightNotice=','-Creator=']
+            cmd.append(fp)
+            try:
+                flags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0
+                res=subprocess.run(cmd,capture_output=True,text=True,timeout=30,creationflags=flags)
+                actual=os.path.basename(fp)
+                if res.returncode==0: ok+=1; self.after(0,lambda fn=actual:self._log_msg(f"✓  {fn}"))
+                else:
+                    errors+=1; err=(res.stderr or res.stdout or "Unknown").strip()
+                    self.after(0,lambda fn=actual,e=err:self._log_msg(f"✗  {fn} — {e}"))
+            except Exception as ex:
+                errors+=1; self.after(0,lambda fn=fn,e=str(ex):self._log_msg(f"✗  {fn} — {e}"))
+        summary=f"{ok} embedded · {skipped} not found · {errors} errors"
+        self.after(0,lambda:(self._log_msg(f"● Done — {summary}"),
+            self._emb_btn.configure(state="normal",text="▶  Start Again"),
+            setattr(self,'embed_running',False)))
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  RESULT CARD
 # ══════════════════════════════════════════════════════════════════════
 class MetaResultCard(ctk.CTkFrame):
     def __init__(self,master,path,result,on_redo,mode="meta",**kw):
-        super().__init__(master,fg_color=GLASS,corner_radius=12,
+        super().__init__(master,fg_color=GLASS,corner_radius=10,
             border_width=1,border_color=GLASS_BDR,**kw)
-        self.path=path; self.result=result; self.mode=mode
+        self.path=path; self.result=dict(result); self.mode=mode
+        self._boxes={}
         self._build(on_redo)
 
     def _build(self,on_redo):
-        self.grid_columnconfigure(1,weight=1)
+        self.grid_columnconfigure(0,weight=1)
 
-        # Thumbnail
-        tf=ctk.CTkFrame(self,fg_color=BG3,corner_radius=10,width=90,height=90)
-        tf.grid(row=0,column=0,rowspan=5,padx=(10,8),pady=10,sticky="n")
-        tf.grid_propagate(False)
-        self._tlbl=ctk.CTkLabel(tf,text="🖼",font=ctk.CTkFont("Segoe UI",20),
-            fg_color=BG3,text_color=TXT3,width=88,height=88,corner_radius=8)
+        # Top: thumbnail + filename row
+        top=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
+        top.grid(row=0,column=0,sticky="ew",padx=8,pady=(8,4))
+        top.grid_columnconfigure(1,weight=1)
+
+        tf=ctk.CTkFrame(top,fg_color=BG3,corner_radius=6,width=56,height=56)
+        tf.grid(row=0,column=0,rowspan=2,padx=(0,8)); tf.grid_propagate(False)
+        self._tlbl=ctk.CTkLabel(tf,text="🖼",font=ctk.CTkFont("Segoe UI",16),
+            fg_color=BG3,text_color=TXT3,width=54,height=54,corner_radius=6)
         self._tlbl.pack()
         threading.Thread(target=self._load_thumb,daemon=True).start()
 
-        # Filename
         fname=os.path.basename(self.path)
-        ctk.CTkLabel(self,text=fname,font=ctk.CTkFont("Segoe UI",11,"bold"),
-            text_color=TXT2,fg_color="transparent",anchor="w"
-        ).grid(row=0,column=1,sticky="w",pady=(10,2),padx=(0,10))
+        ctk.CTkLabel(top,text=fname[:36]+"…" if len(fname)>36 else fname,
+            font=ctk.CTkFont("Segoe UI",10,"bold"),text_color=TXT2,
+            fg_color="transparent",anchor="w"
+        ).grid(row=0,column=1,sticky="w")
+
+        model_used=self.result.get("model_used","")
+        if model_used:
+            ctk.CTkLabel(top,text=model_used,font=ctk.CTkFont("Segoe UI",8),
+                text_color=TXT3,fg_color=BG4,corner_radius=20,padx=6,pady=2
+            ).grid(row=1,column=1,sticky="w")
+
+        # Redo button top-right
+        ctk.CTkButton(top,text="↺",width=28,height=28,
+            font=ctk.CTkFont("Segoe UI",12,"bold"),
+            fg_color=BG4,hover_color=AMB_DIM,text_color=AMB_BTN,
+            corner_radius=8,command=on_redo
+        ).grid(row=0,column=2,rowspan=2,padx=(4,0))
 
         if self.mode=="prompt":
-            prompt_val=self.result.get("prompt","")
-            wcount=len(prompt_val.split()) if prompt_val else 0
-            phdr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
-            phdr.grid(row=1,column=1,sticky="ew",padx=(0,10),pady=(4,0))
-            phdr.grid_columnconfigure(1,weight=1)
-            ctk.CTkLabel(phdr,text=f"Generated Prompt  ({wcount} words)",
-                font=ctk.CTkFont("Segoe UI",9,"bold"),text_color=TXT3,
-                fg_color="transparent").grid(row=0,column=0,sticky="w")
-            pbf=ctk.CTkFrame(phdr,fg_color="transparent",corner_radius=0)
-            pbf.grid(row=0,column=2,sticky="e")
-            ctk.CTkButton(pbf,text="⧉ Copy",width=62,height=18,
-                font=ctk.CTkFont("Segoe UI",9),fg_color=BG4,hover_color=BG3,
-                text_color=TXT3,corner_radius=20,
-                command=lambda:self._copy(prompt_val)).pack(side="left",padx=(0,4))
-            pbox=ctk.CTkTextbox(self,height=120,
-                font=ctk.CTkFont("Segoe UI",10),fg_color=BG3,text_color=CYAN,
-                border_color=GLASS_BDR,border_width=1,corner_radius=6,wrap="word")
-            pbox.grid(row=2,column=1,sticky="ew",padx=(0,10),pady=(0,4))
-            if prompt_val: pbox.insert("1.0",prompt_val)
-            ftr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
-            ftr.grid(row=3,column=1,sticky="ew",padx=(0,10),pady=(4,10))
-            ftr.grid_columnconfigure(1,weight=1)
-            model_used=self.result.get("model_used","")
-            if model_used:
-                ctk.CTkLabel(ftr,text=model_used,font=ctk.CTkFont("Segoe UI",9),
-                    text_color=TXT3,fg_color=BG4,corner_radius=20,padx=8,pady=2
-                ).grid(row=0,column=1,sticky="e",padx=(8,0))
-            ctk.CTkButton(ftr,text="↺ Redo",width=76,height=26,
-                font=ctk.CTkFont("Segoe UI",10,"bold"),
-                fg_color=BG4,hover_color=AMB_DIM,text_color=AMB_BTN,
-                border_width=1,border_color=GLASS_BDR,corner_radius=8,
-                command=on_redo).grid(row=0,column=2,padx=(8,0))
-            return   # prompt mode done
+            self._build_prompt_fields()
+        else:
+            self._build_meta_fields()
 
+    def _build_prompt_fields(self):
+        prompt_val=self.result.get("prompt","")
+        wcount=len(prompt_val.split()) if prompt_val else 0
+        hdr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
+        hdr.grid(row=1,column=0,sticky="ew",padx=8,pady=(0,2))
+        hdr.grid_columnconfigure(1,weight=1)
+        ctk.CTkLabel(hdr,text=f"Prompt  ({wcount} words)",
+            font=ctk.CTkFont("Segoe UI",9,"bold"),text_color=TXT3,
+            fg_color="transparent").grid(row=0,column=0,sticky="w")
+        bf=ctk.CTkFrame(hdr,fg_color="transparent",corner_radius=0)
+        bf.grid(row=0,column=2,sticky="e")
+        ctk.CTkButton(bf,text="⧉",width=28,height=20,font=ctk.CTkFont("Segoe UI",9),
+            fg_color=BG4,hover_color=BG3,text_color=TXT3,corner_radius=10,
+            command=lambda:self._copy("prompt")).pack(side="left",padx=(0,2))
+        ctk.CTkButton(bf,text="⎙",width=28,height=20,font=ctk.CTkFont("Segoe UI",9),
+            fg_color=BG4,hover_color=BG3,text_color=TXT3,corner_radius=10,
+            command=lambda:self._paste("prompt")).pack(side="left")
+        box=ctk.CTkTextbox(self,height=90,font=ctk.CTkFont("Segoe UI",10),
+            fg_color=BG3,text_color=CYAN,border_color=GLASS_BDR,border_width=1,
+            corner_radius=6,wrap="word")
+        box.grid(row=2,column=0,sticky="ew",padx=8,pady=(0,8))
+        if prompt_val: box.insert("1.0",prompt_val)
+        self._boxes["prompt"]=box
+        def _upd(e=None):
+            self.result["prompt"]=box.get("1.0","end-1c")
+        box.bind("<KeyRelease>",_upd)
+
+    def _build_meta_fields(self):
         title=self.result.get("title","")
         desc=self.result.get("desc","")
         kw=self.result.get("kw","")
         kw_count=len([x for x in kw.split(",") if x.strip()]) if kw else 0
 
-        for row_idx,(label,val,color,is_kw) in enumerate([
-            ("Title",    title, CYAN,     False),
-            ("Description",desc,TXT2,    False),
-            (f"Keywords  ({kw_count})",kw,GRN,True),
-        ],1):
+        fields=[
+            ("title",  f"Title  ({len(title)} chars)",  title, CYAN,  36),
+            ("desc",   f"Desc  ({len(desc)} chars)",    desc,  TXT2,  44),
+            ("kw",     f"Keywords  ({kw_count})",        kw,    GRN,   52),
+        ]
+        for r,(key,label,val,color,h) in enumerate(fields,1):
             hdr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
-            hdr.grid(row=row_idx*2-1,column=1,sticky="ew",padx=(0,10),pady=(4,0))
+            hdr.grid(row=r*2-1,column=0,sticky="ew",padx=8,pady=(4 if r==1 else 2,0))
             hdr.grid_columnconfigure(1,weight=1)
             ctk.CTkLabel(hdr,text=label,font=ctk.CTkFont("Segoe UI",9,"bold"),
                 text_color=TXT3,fg_color="transparent").grid(row=0,column=0,sticky="w")
-
-            # Copy + Paste buttons
-            btn_f=ctk.CTkFrame(hdr,fg_color="transparent",corner_radius=0)
-            btn_f.grid(row=0,column=2,sticky="e")
-            ctk.CTkButton(btn_f,text="⧉ Copy",width=62,height=18,
-                font=ctk.CTkFont("Segoe UI",9),fg_color=BG4,hover_color=BG3,
-                text_color=TXT3,corner_radius=20,
-                command=lambda v=val:self._copy(v)).pack(side="left",padx=(0,4))
-            ctk.CTkButton(btn_f,text="⎙ Paste",width=62,height=18,
-                font=ctk.CTkFont("Segoe UI",9),fg_color=BG4,hover_color=BG3,
-                text_color=TXT3,corner_radius=20,
-                command=lambda k=label,row=row_idx:self._paste(k)).pack(side="left")
-
-            field_h = 36 if not is_kw else 60
-            box=ctk.CTkTextbox(self,height=field_h,
-                font=ctk.CTkFont("Segoe UI",10),
-                fg_color=BG3,text_color=color,
-                border_color=GLASS_BDR,border_width=1,corner_radius=6,wrap="word")
-            box.grid(row=row_idx*2,column=1,sticky="ew",padx=(0,10),pady=(0,2))
+            bf=ctk.CTkFrame(hdr,fg_color="transparent",corner_radius=0)
+            bf.grid(row=0,column=2,sticky="e")
+            ctk.CTkButton(bf,text="⧉",width=28,height=20,font=ctk.CTkFont("Segoe UI",9),
+                fg_color=BG4,hover_color=BG3,text_color=TXT3,corner_radius=10,
+                command=lambda k=key:self._copy(k)).pack(side="left",padx=(0,2))
+            ctk.CTkButton(bf,text="⎙",width=28,height=20,font=ctk.CTkFont("Segoe UI",9),
+                fg_color=BG4,hover_color=BG3,text_color=TXT3,corner_radius=10,
+                command=lambda k=key:self._paste(k)).pack(side="left")
+            box=ctk.CTkTextbox(self,height=h,font=ctk.CTkFont("Segoe UI",10),
+                fg_color=BG3,text_color=color,border_color=GLASS_BDR,border_width=1,
+                corner_radius=6,wrap="word")
+            box.grid(row=r*2,column=0,sticky="ew",padx=8,pady=(1,0))
             if val: box.insert("1.0",val)
-            else: box.insert("1.0","(none)")
-            # Store reference so paste can update it
-            if is_kw: self._kw_box=box
-            elif label=="Title": self._title_box=box
-            else: self._desc_box=box
+            self._boxes[key]=box
+            def _upd(e=None,k=key,b=box):
+                self.result[k]=b.get("1.0","end-1c")
+            box.bind("<KeyRelease>",_upd)
 
-        # Footer
-        ftr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
-        ftr.grid(row=7,column=1,sticky="ew",padx=(0,10),pady=(6,10))
-        ftr.grid_columnconfigure(1,weight=1)
-        stats=f"Title: {len(title)} chars   Desc: {len(desc)} chars   Keywords: {kw_count}"
-        ctk.CTkLabel(ftr,text=stats,font=ctk.CTkFont("Segoe UI",9),
-            text_color=TXT3,fg_color="transparent").grid(row=0,column=0,sticky="w")
-        model_used=self.result.get("model_used","")
-        if model_used:
-            ctk.CTkLabel(ftr,text=model_used,font=ctk.CTkFont("Segoe UI",9),
-                text_color=TXT3,fg_color=BG4,corner_radius=20,padx=8,pady=2
-            ).grid(row=0,column=1,sticky="e",padx=(8,0))
-        ctk.CTkButton(ftr,text="↺ Redo",width=76,height=26,
-            font=ctk.CTkFont("Segoe UI",10,"bold"),
-            fg_color=BG4,hover_color=AMB_DIM,text_color=AMB_BTN,
-            border_width=1,border_color=GLASS_BDR,corner_radius=8,
-            command=on_redo).grid(row=0,column=2,padx=(8,0))
+        # bottom padding
+        ctk.CTkFrame(self,fg_color="transparent",height=6,corner_radius=0).grid(
+            row=8,column=0)
 
-    def _copy(self,text): self.clipboard_clear(); self.clipboard_append(text)
+    def _copy(self,key):
+        val=self._boxes[key].get("1.0","end-1c") if key in self._boxes else self.result.get(key,"")
+        self.clipboard_clear(); self.clipboard_append(val)
 
-    def _paste(self,field_key):
-        """Replace the clicked field with clipboard content."""
-        try:
-            clip=self.clipboard_get()
+    def _paste(self,key):
+        try: clip=self.clipboard_get()
         except: return
-        key_map={"Title":"title","Description":"desc"}
-        if "Keywords" in field_key: key_map_key="kw"
-        else: key_map_key=key_map.get(field_key,"")
-        if key_map_key and clip.strip():
-            self.result[key_map_key]=clip.strip()
-            # Rebuild display in-place
-            for w in self.winfo_children(): w.destroy()
-            self._build(lambda:None)
+        if key in self._boxes:
+            self._boxes[key].delete("1.0","end")
+            self._boxes[key].insert("1.0",clip)
+            self.result[key]=clip
+
+    def get_result(self):
+        for k,b in self._boxes.items():
+            self.result[k]=b.get("1.0","end-1c")
+        return self.result
 
     def _load_thumb(self):
-        img=make_thumb(self.path,(86,86))
+        img=make_thumb(self.path,(54,54))
         if img:
             self.after(0,lambda:(self._tlbl.configure(image=img,text=""),
                 setattr(self._tlbl,"_image",img)))
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  DnD MIXIN + MAIN APP
+#  DnD MIXIN
 # ══════════════════════════════════════════════════════════════════════
 if DND_AVAILABLE:
     class DnDCTk(ctk.CTk,TkinterDnD.DnDWrapper):
@@ -993,8 +1167,11 @@ else:
     DnDCTk=ctk.CTk
 
 
+# ══════════════════════════════════════════════════════════════════════
+#  MAIN APP
+# ══════════════════════════════════════════════════════════════════════
 class App(DnDCTk):
-    VERSION="v1.2"
+    VERSION="v1.3"
 
     def __init__(self):
         super().__init__()
@@ -1004,37 +1181,30 @@ class App(DnDCTk):
 
         self._all_paths=[]; self._results={}
         self._thumb_queue=queue.Queue()
-        self.ai_running=False; self.ai_stop_flag=False; self.current_mode="meta"
+        self.ai_running=False; self.ai_stop_flag=False
+        self._ai_paused=False; self.current_mode="meta"
         self._result_cards=[]; self._source_folder=""
 
-        # Embed state
-        self.csv_rows=[]; self.csv_headers=[]; self.embed_running=False
-        self.csv_path_var=StringVar(); self.folder_path_var=StringVar()
-        self.col_file_var=StringVar(value="(skip)"); self.col_title_var=StringVar(value="(skip)")
-        self.col_kw_var=StringVar(value="(skip)"); self.col_desc_var=StringVar(value="(skip)")
-        self.match_only_var=BooleanVar(value=True); self.subfolder_var=BooleanVar(value=True)
-        self.rm_prog_var=BooleanVar(value=True)
-
         # AI settings
-        self.ai_title_var   =StringVar(value=str(self.prefs.get("title_len",130)))
-        self.ai_desc_var    =StringVar(value=str(self.prefs.get("desc_len",200)))
-        self.ai_kw_var      =StringVar(value=str(self.prefs.get("kw_count",49)))
-        self.ai_words_var   =StringVar(value=str(self.prefs.get("prompt_words",60)))
-        self.ai_custom_var  =StringVar(value=self.prefs.get("custom_prompt",""))
+        self.ai_title_var    =StringVar(value=str(self.prefs.get("title_len",130)))
+        self.ai_desc_var     =StringVar(value=str(self.prefs.get("desc_len",200)))
+        self.ai_kw_var       =StringVar(value=str(self.prefs.get("kw_count",49)))
+        self.ai_words_var    =StringVar(value=str(self.prefs.get("prompt_words",60)))
+        self.ai_custom_var   =StringVar(value=self.prefs.get("custom_prompt",""))
         self.ai_single_kw_var=BooleanVar(value=self.prefs.get("single_keywords",False))
-        self.ai_avoid_copyright_var=BooleanVar(value=self.prefs.get("avoid_copyright",False))
+        self.ai_avoid_copy_var=BooleanVar(value=self.prefs.get("avoid_copyright",False))
         self.ai_concurrency_var=IntVar(value=self.prefs.get("concurrency",1))
+        self.ai_platform_var =StringVar(value=self.prefs.get("platform","Adobe Stock"))
         self.ai_prefix_on_var=BooleanVar(value=False)
         self.ai_suffix_on_var=BooleanVar(value=False)
         self.ai_prefix_text_var=StringVar(value=self.prefs.get("prefix_text",""))
         self.ai_suffix_text_var=StringVar(value=self.prefs.get("suffix_text",""))
-
         self._style_vars={}
         for s in ["Silhouette","White Background","Transparent","Vector","Videos"]:
             self._style_vars[s]=BooleanVar(value=False)
 
         self._build_ui()
-        self._center(1320,920)
+        self._center(1300,900)
         self.minsize(1000,700)
         self.after(200,self._check_et)
         self.after(500,self._online_loop)
@@ -1047,12 +1217,13 @@ class App(DnDCTk):
 
     def ts(self): return datetime.datetime.now().strftime("%H:%M:%S")
 
+    # ── Online ─────────────────────────────────────────────────────
     def _online_loop(self):
-        def _chk():
+        def _c():
             online=check_online()
             self.after(0,lambda:self._set_online(online))
             self.after(8000,self._online_loop)
-        threading.Thread(target=_chk,daemon=True).start()
+        threading.Thread(target=_c,daemon=True).start()
 
     def _set_online(self,online):
         self._is_online=online
@@ -1067,6 +1238,7 @@ class App(DnDCTk):
             self._online_dot.configure(text_color=TXT3 if n%2==0 else base)
             self.after(350,lambda:self._blink(n+1))
 
+    # ── Thumb queue ────────────────────────────────────────────────
     def _poll_thumb_queue(self):
         done=0
         try:
@@ -1079,12 +1251,17 @@ class App(DnDCTk):
         except queue.Empty: pass
         self.after(80,self._poll_thumb_queue)
 
-    # ── BUILD UI ───────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════
+    #  BUILD UI
+    # ══════════════════════════════════════════════════════════════
     def _build_ui(self):
         self.grid_columnconfigure(0,weight=1)
-        self.grid_rowconfigure(0,weight=0); self.grid_rowconfigure(1,weight=0)
-        self.grid_rowconfigure(2,weight=1); self.grid_rowconfigure(3,weight=0)
-        self._build_titlebar(); self._build_tabbar(); self._build_statusbar()
+        self.grid_rowconfigure(0,weight=0)  # title bar
+        self.grid_rowconfigure(1,weight=1)  # content
+        self.grid_rowconfigure(2,weight=0)  # status bar
+        self._build_titlebar()
+        self._build_content()
+        self._build_statusbar()
 
     def _build_titlebar(self):
         tb=ctk.CTkFrame(self,fg_color=BG2,corner_radius=0,height=54)
@@ -1098,7 +1275,6 @@ class App(DnDCTk):
         ctk.CTkLabel(tb,text=self.VERSION,font=ctk.CTkFont("Segoe UI",9,"bold"),
             text_color=GRN,fg_color=GRN_DIM,corner_radius=20,padx=8,pady=2
         ).grid(row=0,column=2,sticky="w",padx=(8,0))
-        # Online indicator
         of=ctk.CTkFrame(tb,fg_color=BG3,corner_radius=20)
         of.grid(row=0,column=3,padx=(0,16),pady=12)
         self._online_dot=ctk.CTkLabel(of,text="●",font=ctk.CTkFont("Segoe UI",16),
@@ -1112,51 +1288,22 @@ class App(DnDCTk):
         ctk.CTkLabel(cr,text="© HASIBNIKON",font=ctk.CTkFont("Segoe UI",13,"bold"),
             text_color=TXT,fg_color=BG2).pack(anchor="e")
 
-    def _build_tabbar(self):
-        tb=ctk.CTkFrame(self,fg_color=BG2,corner_radius=0,height=46)
-        tb.grid(row=1,column=0,sticky="ew"); tb.grid_propagate(False)
-        tb.grid_columnconfigure(2,weight=1)
-        self._ai_tab_btn=ctk.CTkButton(tb,text="✨  Metadata AI",
-            font=ctk.CTkFont("Segoe UI",12,"bold"),
-            fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,
-            width=160,height=30,corner_radius=15,command=lambda:self._switch_tab("ai"))
-        self._ai_tab_btn.grid(row=0,column=0,padx=(12,4),pady=8)
-        self._emb_tab_btn=ctk.CTkButton(tb,text="📋  Embed Metadata",
-            font=ctk.CTkFont("Segoe UI",12,"bold"),
-            fg_color=BG3,hover_color=BG4,text_color=TXT3,
-            width=178,height=30,corner_radius=15,command=lambda:self._switch_tab("embed"))
-        self._emb_tab_btn.grid(row=0,column=1,padx=4,pady=8)
-        self._content=ctk.CTkFrame(self,fg_color=BG1,corner_radius=0)
-        self._content.grid(row=2,column=0,sticky="nsew")
-        self._content.grid_columnconfigure(0,weight=1); self._content.grid_rowconfigure(0,weight=1)
-        self._ai_frame=ctk.CTkFrame(self._content,fg_color=BG1,corner_radius=0)
-        self._emb_frame=ctk.CTkFrame(self._content,fg_color=BG1,corner_radius=0)
-        self._ai_frame.grid(row=0,column=0,sticky="nsew")
-        self._emb_frame.grid(row=0,column=0,sticky="nsew")
-        self._build_ai_tab(self._ai_frame)
-        self._build_embed_tab(self._emb_frame)
-        self._switch_tab("ai")
-
-    def _switch_tab(self,which):
-        if which=="ai":
-            self._ai_frame.tkraise()
-            self._ai_tab_btn.configure(fg_color=GRN,text_color=ABSOLUTE_BG)
-            self._emb_tab_btn.configure(fg_color=BG3,text_color=TXT3)
-        else:
-            self._emb_frame.tkraise()
-            self._emb_tab_btn.configure(fg_color=GRN,text_color=ABSOLUTE_BG)
-            self._ai_tab_btn.configure(fg_color=BG3,text_color=TXT3)
-
-    # ── AI TAB ─────────────────────────────────────────────────────
-    def _build_ai_tab(self,parent):
-        parent.grid_columnconfigure(0,weight=0); parent.grid_columnconfigure(1,weight=1)
-        parent.grid_rowconfigure(0,weight=1)
-        self._sb_frame=ctk.CTkFrame(parent,fg_color=BG2,corner_radius=0,width=268)
+    def _build_content(self):
+        content=ctk.CTkFrame(self,fg_color=BG1,corner_radius=0)
+        content.grid(row=1,column=0,sticky="nsew")
+        content.grid_columnconfigure(0,weight=0)  # sidebar
+        content.grid_columnconfigure(1,weight=1)  # main
+        content.grid_rowconfigure(0,weight=1)
+        self._sb_frame=ctk.CTkFrame(content,fg_color=BG2,corner_radius=0,width=268)
         self._sb_frame.grid(row=0,column=0,sticky="nsew"); self._sb_frame.grid_propagate(False)
-        self._main=ctk.CTkFrame(parent,fg_color=BG1,corner_radius=0)
+        self._main=ctk.CTkFrame(content,fg_color=BG1,corner_radius=0)
         self._main.grid(row=0,column=1,sticky="nsew")
         self._main.grid_columnconfigure(0,weight=1)
-        self._build_sidebar(); self._build_main()
+        self._main.grid_rowconfigure(1,weight=0)  # upload zone
+        self._main.grid_rowconfigure(2,weight=0)  # progress bar
+        self._main.grid_rowconfigure(3,weight=1)  # generated section
+        self._build_sidebar()
+        self._build_main()
 
     # ── SIDEBAR ────────────────────────────────────────────────────
     def _build_sidebar(self):
@@ -1169,7 +1316,7 @@ class App(DnDCTk):
         inner.grid(row=1,column=0,sticky="nsew"); inner.grid_columnconfigure(0,weight=1)
         self._sb=inner
 
-        # API Config button
+        # API config
         ctk.CTkButton(inner,text="🔑  API Configuration",
             font=ctk.CTkFont("Segoe UI",12,"bold"),
             fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,
@@ -1179,10 +1326,11 @@ class App(DnDCTk):
             text_color=TXT3,fg_color=BG2); self._api_lbl.pack(anchor="w",padx=12,pady=(0,4))
         self._refresh_api_lbl()
 
-        # Concurrency slider (1-4)
-        conc_f=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
-        conc_f.pack(fill="x",padx=10,pady=(0,6)); conc_f.grid_columnconfigure(0,weight=1)
-        top=ctk.CTkFrame(conc_f,fg_color=BG2,corner_radius=0); top.pack(fill="x")
+        # Concurrency slider
+        self._div(inner)
+        cf=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
+        cf.pack(fill="x",padx=10,pady=(0,6)); cf.grid_columnconfigure(0,weight=1)
+        top=ctk.CTkFrame(cf,fg_color=BG2,corner_radius=0); top.pack(fill="x")
         top.grid_columnconfigure(0,weight=1)
         ctk.CTkLabel(top,text="Concurrent Generations",
             font=ctk.CTkFont("Segoe UI",11),text_color=TXT2,fg_color=BG2
@@ -1191,16 +1339,13 @@ class App(DnDCTk):
             font=ctk.CTkFont("Segoe UI",10,"bold"),text_color=GRN,
             fg_color=BG3,corner_radius=20,padx=7,pady=2)
         self._conc_lbl.grid(row=0,column=1)
-        conc_sl=ctk.CTkSlider(conc_f,from_=1,to=4,number_of_steps=3,
-            progress_color=GRN,fg_color=BG3,button_color=TXT,
-            button_hover_color="#ddffdd",height=14,variable=self.ai_concurrency_var,
-            command=lambda v:(self._conc_lbl.configure(text=f"{int(v)}x"),
-                self._save_settings()))
-        conc_sl.pack(fill="x",pady=(3,0))
-
-        self._div(inner)
+        ctk.CTkSlider(cf,from_=1,to=4,number_of_steps=3,variable=self.ai_concurrency_var,
+            progress_color=GRN,fg_color=BG3,button_color=TXT,button_hover_color="#ddffdd",height=14,
+            command=lambda v:(self._conc_lbl.configure(text=f"{int(v)}x"),self._save_settings())
+        ).pack(fill="x",pady=(3,0))
 
         # Mode switch
+        self._div(inner)
         mf=ctk.CTkFrame(inner,fg_color=BG3,corner_radius=8)
         mf.pack(fill="x",padx=10,pady=(4,8))
         mf.grid_columnconfigure(0,weight=1); mf.grid_columnconfigure(1,weight=1)
@@ -1215,59 +1360,75 @@ class App(DnDCTk):
             command=lambda:self._set_mode("prompt"))
         self._prompt_mode_btn.grid(row=0,column=1,sticky="ew",padx=(2,4),pady=4)
 
-        # Metadata sliders
-        self._meta_sliders_f=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
-        self._meta_sliders_f.pack(fill="x")
-        msf=self._meta_sliders_f
+        # Metadata settings
+        self._meta_sf=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
+        self._meta_sf.pack(fill="x")
+        msf=self._meta_sf
         self._lbl(msf,"METADATA SETTINGS")
+
+        # Platform dropdown (styled)
+        plat_row=ctk.CTkFrame(msf,fg_color=BG2,corner_radius=0)
+        plat_row.pack(fill="x",padx=10,pady=(0,6)); plat_row.grid_columnconfigure(0,weight=1)
+        ctk.CTkLabel(plat_row,text="Platform",font=ctk.CTkFont("Segoe UI",11),
+            text_color=TXT2,fg_color=BG2).grid(row=0,column=0,sticky="w")
+        self._plat_combo=ctk.CTkComboBox(msf,variable=self.ai_platform_var,
+            values=list(PLATFORM_RULES.keys()),state="readonly",
+            font=ctk.CTkFont("Segoe UI",11,"bold"),
+            fg_color=BG3,text_color=GRN,border_color=GRN_DIM,
+            button_color=GRN,button_hover_color=GRN_H,
+            dropdown_fg_color=BG3,dropdown_text_color=TXT,dropdown_hover_color=BG4,
+            corner_radius=8,height=36,command=self._on_platform_change)
+        self._plat_combo.pack(fill="x",padx=10,pady=(0,8))
+
         self._title_sl=self._slider(msf,"Title Length",self.ai_title_var,10,200,int(self.ai_title_var.get()))
         self._desc_sl =self._slider(msf,"Description Length",self.ai_desc_var,20,500,int(self.ai_desc_var.get()))
         self._kw_sl   =self._slider(msf,"Keywords Count",self.ai_kw_var,5,49,int(self.ai_kw_var.get()))
-        # Single keyword toggle
-        sk_row=ctk.CTkFrame(msf,fg_color=BG2,corner_radius=0)
-        sk_row.pack(fill="x",padx=10,pady=(2,4)); sk_row.grid_columnconfigure(0,weight=1)
-        ctk.CTkLabel(sk_row,text="Single Word Keywords",font=ctk.CTkFont("Segoe UI",11),
-            text_color=TXT2,fg_color=BG2).grid(row=0,column=0,sticky="w")
-        ctk.CTkSwitch(sk_row,text="",variable=self.ai_single_kw_var,
-            progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
-            onvalue=True,offvalue=False,width=46,height=24,command=self._save_settings
-        ).grid(row=0,column=1,sticky="e")
 
-        ac_row=ctk.CTkFrame(msf,fg_color=BG3,corner_radius=8,border_width=1,border_color=GLASS_BDR)
-        ac_row.pack(fill="x",padx=10,pady=(2,8)); ac_row.grid_columnconfigure(0,weight=1)
-        ctk.CTkLabel(ac_row,text="🚫  Avoid Copyright",font=ctk.CTkFont("Segoe UI",11,"bold"),
-            text_color=TXT2,fg_color=BG3).grid(row=0,column=0,sticky="w",padx=8,pady=6)
-        ctk.CTkSwitch(ac_row,text="",variable=self.ai_avoid_copyright_var,
-            progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
-            onvalue=True,offvalue=False,width=46,height=24,command=self._save_settings
-        ).grid(row=0,column=1,sticky="e",padx=8)
+        # Single keyword + Avoid copyright
+        for label,var in [("Single Word Keywords",self.ai_single_kw_var),
+                           ("🚫  Avoid Copyright",self.ai_avoid_copy_var)]:
+            rf=ctk.CTkFrame(msf,fg_color=BG3 if "Copyright" in label else BG2,
+                corner_radius=8 if "Copyright" in label else 0,
+                border_width=1 if "Copyright" in label else 0,
+                border_color=GLASS_BDR)
+            rf.pack(fill="x",padx=10,pady=(1,4 if "Copyright" in label else 1))
+            rf.grid_columnconfigure(0,weight=1)
+            ctk.CTkLabel(rf,text=label,font=ctk.CTkFont("Segoe UI",11),
+                text_color=TXT2,fg_color="transparent",
+                padx=8 if "Copyright" in label else 0,
+                pady=4 if "Copyright" in label else 0
+            ).grid(row=0,column=0,sticky="w",padx=(8 if "Copyright" in label else 0,0),
+                   pady=(6 if "Copyright" in label else 0,6 if "Copyright" in label else 0))
+            ctk.CTkSwitch(rf,text="",variable=var,
+                progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
+                onvalue=True,offvalue=False,width=46,height=24,command=self._save_settings
+            ).grid(row=0,column=1,sticky="e",padx=(0,8 if "Copyright" in label else 0),
+                   pady=(6 if "Copyright" in label else 0,6 if "Copyright" in label else 0))
 
-        self._slider_anchor=ctk.CTkFrame(inner,fg_color=BG2,height=0,corner_radius=0)
-        self._slider_anchor.pack(fill="x")
+        # Anchor for stable mode switch
+        self._sl_anchor=ctk.CTkFrame(inner,fg_color=BG2,height=0,corner_radius=0)
+        self._sl_anchor.pack(fill="x")
 
         # Prompt sliders (hidden initially)
-        self._prompt_sliders_f=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
-        self._lbl(self._prompt_sliders_f,"PROMPT SETTINGS")
-        self._words_sl=self._slider(self._prompt_sliders_f,"Max Prompt Words",
+        self._prompt_sf=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
+        self._lbl(self._prompt_sf,"PROMPT SETTINGS")
+        self._words_sl=self._slider(self._prompt_sf,"Max Prompt Words",
             self.ai_words_var,10,200,int(self.ai_words_var.get()))
 
+        # Advanced options (collapsible)
         self._div(inner)
-
-        # ── ADVANCED OPTIONS (collapsible) ─────────────────────────
         self._adv_visible=False
         self._adv_body=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
-        adv_btn=ctk.CTkButton(inner,text="▶  Advanced Options",height=32,
+        self._adv_btn=ctk.CTkButton(inner,text="▶  Advanced Options",height=32,
             font=ctk.CTkFont("Segoe UI",11,"bold"),
             fg_color=BG3,hover_color=BG4,text_color=TXT2,
             border_width=1,border_color=GLASS_BDR,corner_radius=8,anchor="w",
             command=self._toggle_advanced)
-        adv_btn.pack(fill="x",padx=10,pady=(0,4))
-        self._adv_btn=adv_btn
+        self._adv_btn.pack(fill="x",padx=10,pady=(0,4))
 
-        ab=self._adv_body
-        ab.grid_columnconfigure(0,weight=1)
+        ab=self._adv_body; ab.grid_columnconfigure(0,weight=1)
 
-        # Content Themes
+        # Content themes inside advanced
         ctk.CTkLabel(ab,text="CONTENT THEMES",font=ctk.CTkFont("Segoe UI",9,"bold"),
             text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(8,2))
         for s in ["Silhouette","White Background","Transparent","Vector","Videos"]:
@@ -1282,34 +1443,32 @@ class App(DnDCTk):
 
         ctk.CTkFrame(ab,fg_color=GLASS_BDR,height=1,corner_radius=0).pack(fill="x",padx=8,pady=6)
 
-        # Prefix / Suffix — each entry appears directly under its toggle
+        # Prefix / Suffix — entry appears directly under its own toggle
         ctk.CTkLabel(ab,text="TITLE PREFIX / SUFFIX",font=ctk.CTkFont("Segoe UI",9,"bold"),
             text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(4,2))
-
         for label,on_var,text_var in [
             ("Add Prefix",self.ai_prefix_on_var,self.ai_prefix_text_var),
             ("Add Suffix",self.ai_suffix_on_var,self.ai_suffix_text_var),
         ]:
             grp=ctk.CTkFrame(ab,fg_color=BG2,corner_radius=0)
-            grp.pack(fill="x",padx=10,pady=(1,0)); grp.grid_columnconfigure(0,weight=1)
+            grp.pack(fill="x",padx=10,pady=(2,0)); grp.grid_columnconfigure(0,weight=1)
             ctk.CTkLabel(grp,text=label,font=ctk.CTkFont("Segoe UI",11),
                 text_color=TXT2,fg_color=BG2).grid(row=0,column=0,sticky="w")
-            txt_entry=ctk.CTkEntry(grp,textvariable=text_var,
-                placeholder_text=f"Type {label.split()[1].lower()} here…",height=30,
+            entry=ctk.CTkEntry(grp,textvariable=text_var,
+                placeholder_text=f"Type {label.split()[1].lower()} text here…",height=30,
                 font=ctk.CTkFont("Segoe UI",11),fg_color=BG3,text_color=TXT,
                 border_color=GLASS_BDR,corner_radius=8)
-            # Entry starts hidden
-            def _toggle(ov=on_var,e=txt_entry,g=grp):
-                if ov.get(): e.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(4,4))
+            def _tog(ov=on_var,e=entry,g=grp):
+                if ov.get(): e.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(3,4))
                 else: e.grid_remove()
             sw=ctk.CTkSwitch(grp,text="",variable=on_var,
                 progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
-                onvalue=True,offvalue=False,width=46,height=24,command=_toggle)
+                onvalue=True,offvalue=False,width=46,height=24,command=_tog)
             sw.grid(row=0,column=1,sticky="e")
 
         ctk.CTkFrame(ab,fg_color=GLASS_BDR,height=1,corner_radius=0).pack(fill="x",padx=8,pady=6)
 
-        # Custom System Prompt
+        # Custom system prompt
         ctk.CTkLabel(ab,text="CUSTOM SYSTEM PROMPT",font=ctk.CTkFont("Segoe UI",9,"bold"),
             text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(4,2))
         self._custom_box=ctk.CTkTextbox(ab,height=68,
@@ -1323,52 +1482,39 @@ class App(DnDCTk):
             hover_color=BG3,text_color=CYAN,corner_radius=6,anchor="w",
             command=self._reset_defaults).pack(anchor="w",padx=10,pady=(0,10))
 
-    def _set_mode(self,mode):
-        self.current_mode=mode
-        if mode=="meta":
-            self._meta_mode_btn.configure(fg_color=GRN,text_color=ABSOLUTE_BG)
-            self._prompt_mode_btn.configure(fg_color="transparent",text_color=TXT3)
-            self._prompt_sliders_f.pack_forget()
-            self._meta_sliders_f.pack(fill="x",before=self._slider_anchor)
-        else:
-            self._prompt_mode_btn.configure(fg_color=GRN,text_color=ABSOLUTE_BG)
-            self._meta_mode_btn.configure(fg_color="transparent",text_color=TXT3)
-            self._meta_sliders_f.pack_forget()
-            self._prompt_sliders_f.pack(fill="x",before=self._slider_anchor)
-        self._clear_results()
-
     def _toggle_advanced(self):
         self._adv_visible=not self._adv_visible
         if self._adv_visible:
-            self._adv_body.pack(fill="x",padx=0,pady=(0,4))
+            self._adv_body.pack(fill="x",pady=(0,4))
             self._adv_btn.configure(text="▼  Advanced Options")
         else:
             self._adv_body.pack_forget()
             self._adv_btn.configure(text="▶  Advanced Options")
 
-    def _pause_ai(self):
-        """Pause: set flag, workers check it between images."""
-        if not self.ai_running: return
-        self._ai_paused = not getattr(self,"_ai_paused",False)
-        if self._ai_paused:
-            self._pause_btn.configure(text="▶  Resume",fg_color=GRN_DIM,text_color=GRN)
-            self.set_status("⏸  Paused",AMB_BTN)
+    def _set_mode(self,mode):
+        self.current_mode=mode
+        if mode=="meta":
+            self._meta_mode_btn.configure(fg_color=GRN,text_color=ABSOLUTE_BG)
+            self._prompt_mode_btn.configure(fg_color="transparent",text_color=TXT3)
+            self._prompt_sf.pack_forget()
+            self._meta_sf.pack(fill="x",before=self._sl_anchor)
         else:
-            self._pause_btn.configure(text="⏸  Pause",fg_color=AMB_DIM,text_color=AMB_BTN)
-            self.set_status("▶  Resuming…",GRN)
+            self._prompt_mode_btn.configure(fg_color=GRN,text_color=ABSOLUTE_BG)
+            self._meta_mode_btn.configure(fg_color="transparent",text_color=TXT3)
+            self._meta_sf.pack_forget()
+            self._prompt_sf.pack(fill="x",before=self._sl_anchor)
+        self._clear_results()
 
-    def _stop_ai_now(self):
-        """Hard stop — immediately signals all workers to abort."""
-        self.ai_stop_flag=True
-        self._ai_paused=False
-        self.set_status("■  Stopped",RED_BTN)
-
-    def _retry_failed(self):
-        failed=[p for p in self._all_paths if self._results.get(p,{}).get("status")=="failed"]
-        if not failed or self.ai_running: return
-        for p in failed: self._results[p]={"status":"waiting"}
-        self._retry_btn.pack_forget()
-        self.start_generate()
+    def _on_platform_change(self,val):
+        rules=PLATFORM_RULES.get(val,{})
+        kw_val=min(rules.get("kw",49),49)
+        for var,sl,v in [(self.ai_title_var,self._title_sl,rules.get("title",130)),
+                         (self.ai_desc_var,self._desc_sl,rules.get("desc",200)),
+                         (self.ai_kw_var,self._kw_sl,kw_val)]:
+            var.set(str(v)); sl.set(v)
+            lbl=getattr(sl,"_value_label",None)
+            if lbl: lbl.configure(text=str(v))
+        self.ai_platform_var.set(val); self._save_settings()
 
     def _reset_defaults(self):
         for var,sl,val in [(self.ai_title_var,self._title_sl,130),
@@ -1410,12 +1556,13 @@ class App(DnDCTk):
 
     def _save_settings(self):
         self.prefs.update({
+            "platform":self.ai_platform_var.get(),
             "title_len":int(self.ai_title_var.get() or 130),
             "desc_len":int(self.ai_desc_var.get() or 200),
             "kw_count":min(int(self.ai_kw_var.get() or 49),49),
             "prompt_words":int(self.ai_words_var.get() or 60),
             "single_keywords":self.ai_single_kw_var.get(),
-            "avoid_copyright":self.ai_avoid_copyright_var.get(),
+            "avoid_copyright":self.ai_avoid_copy_var.get(),
             "concurrency":int(self.ai_concurrency_var.get()),
             "prefix_text":self.ai_prefix_text_var.get(),
             "suffix_text":self.ai_suffix_text_var.get(),
@@ -1442,109 +1589,83 @@ class App(DnDCTk):
     # ── MAIN AREA ──────────────────────────────────────────────────
     def _build_main(self):
         main=self._main
-        main.grid_rowconfigure(0,weight=0)  # topbar
-        main.grid_rowconfigure(1,weight=0)  # upload workspace
-        main.grid_rowconfigure(2,weight=0)  # progress bar
-        main.grid_rowconfigure(3,weight=1)  # generated metadata
 
-        # TOP BAR: platform tabs + action buttons
-        topbar=ctk.CTkFrame(main,fg_color=BG2,corner_radius=0,height=52)
+        # TOP action bar (no tab buttons — they're gone)
+        topbar=ctk.CTkFrame(main,fg_color=BG2,corner_radius=0,height=50)
         topbar.grid(row=0,column=0,sticky="ew"); topbar.grid_propagate(False)
         topbar.grid_columnconfigure(0,weight=1)
-        plat_f=ctk.CTkFrame(topbar,fg_color=BG2,corner_radius=0)
-        plat_f.grid(row=0,column=0,sticky="w",padx=8,pady=8)
-        self._plat_btns={}
-        plat_scroll=ctk.CTkScrollableFrame(plat_f,fg_color="transparent",
-            height=34,orientation="horizontal",
-            scrollbar_button_color=BG3,scrollbar_button_hover_color=BG4)
-        plat_scroll.pack(fill="x",expand=True)
-        self._plat_btns={}
-        first_plat=list(PLATFORM_RULES.keys())[0]
-        self._cur_platform=getattr(self,"_cur_platform","Adobe Stock")
-        for plat in PLATFORM_RULES:
-            short=plat.replace(" Stock","").replace(" Images","")
-            is_sel=(plat==self._cur_platform)
-            btn=ctk.CTkButton(plat_scroll,text=short,width=max(70,len(short)*8),height=28,
-                font=ctk.CTkFont("Segoe UI",10,"bold"),
-                fg_color=GRN if is_sel else BG3,
-                hover_color=GRN_H,
-                text_color=ABSOLUTE_BG if is_sel else TXT2,
-                border_width=1,
-                border_color=GRN if is_sel else GLASS_BDR,
-                corner_radius=6,command=lambda p=plat:self._sel_platform(p))
-            btn.pack(side="left",padx=(0,3))
-            self._plat_btns[plat]=btn
+
+        left_f=ctk.CTkFrame(topbar,fg_color=BG2,corner_radius=0)
+        left_f.grid(row=0,column=0,sticky="w",padx=8,pady=8)
+        ctk.CTkLabel(left_f,text="✨  Metadata AI",font=ctk.CTkFont("Segoe UI",14,"bold"),
+            text_color=TXT,fg_color=BG2).pack(side="left",padx=(0,8))
 
         btn_f=ctk.CTkFrame(topbar,fg_color=BG2,corner_radius=0)
         btn_f.grid(row=0,column=1,padx=8,pady=8,sticky="e")
+
         ctk.CTkButton(btn_f,text="🗑  Clear All",width=96,height=32,
             font=ctk.CTkFont("Segoe UI",11,"bold"),
             fg_color=RED_DIM,hover_color=RED_BTN_H,text_color=RED_BTN,
             border_width=1,border_color=RED_BTN,corner_radius=8,
-            command=lambda:self._clear_all(confirm=True)).pack(side="left",padx=(0,6))
-        # Pause and Stop — hidden initially, shown only during generation
-        self._pause_btn=ctk.CTkButton(btn_f,text="⏸  Pause",width=90,height=32,
+            command=lambda:self._clear_all(confirm=True)).pack(side="left",padx=(0,5))
+
+        # Pause + Stop (hidden until generation starts)
+        self._pause_btn=ctk.CTkButton(btn_f,text="⏸  Pause",width=86,height=32,
             font=ctk.CTkFont("Segoe UI",11,"bold"),
             fg_color=AMB_DIM,hover_color=AMB_BTN_H,text_color=AMB_BTN,
-            border_width=1,border_color=AMB_BTN,corner_radius=8,
-            command=self._pause_ai)
-        self._stop_btn=ctk.CTkButton(btn_f,text="■  Stop",width=86,height=32,
+            border_width=1,border_color=AMB_BTN,corner_radius=8,command=self._pause_ai)
+        self._stop_btn=ctk.CTkButton(btn_f,text="■  Stop",width=82,height=32,
             font=ctk.CTkFont("Segoe UI",11,"bold"),
             fg_color=RED_DIM,hover_color=RED_BTN_H,text_color=RED_BTN,
-            border_width=1,border_color=RED_BTN,corner_radius=8,
-            command=self._stop_ai_now)
-        # Retry Failed — hidden until there are failures
+            border_width=1,border_color=RED_BTN,corner_radius=8,command=self._stop_ai_now)
         self._retry_btn=ctk.CTkButton(btn_f,text="↺  Retry Failed",width=120,height=32,
             font=ctk.CTkFont("Segoe UI",11,"bold"),
             fg_color=AMB_DIM,hover_color=AMB_BTN_H,text_color=AMB_BTN,
-            border_width=1,border_color=AMB_BTN,corner_radius=8,
-            command=self._retry_failed)
+            border_width=1,border_color=AMB_BTN,corner_radius=8,command=self._retry_failed)
+
         self._gen_btn=ctk.CTkButton(btn_f,text="✨  Generate (0)",width=165,height=32,
             font=ctk.CTkFont("Segoe UI",12,"bold"),
             fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,corner_radius=8,
             command=self.start_generate)
-        self._gen_btn.pack(side="left",padx=(0,6))
-        self._export_btn=ctk.CTkButton(btn_f,text="⬇  Export CSV",width=130,height=32,
+        self._gen_btn.pack(side="left",padx=(0,5))
+
+        self._export_btn=ctk.CTkButton(btn_f,text="⬇  Export CSV",width=128,height=32,
             font=ctk.CTkFont("Segoe UI",11,"bold"),
             fg_color=BG3,hover_color=BG4,text_color=TXT2,
             border_width=1,border_color=GLASS_BDR,corner_radius=8,
             command=self._export_csv)
-        self._export_btn.pack(side="left",padx=(0,6))
-        self._ai_paused=False
-# ZIP button removed per request
+        self._export_btn.pack(side="left",padx=(0,5))
 
-        # UPLOAD WORKSPACE — vertically compact, thumbnail grid
+        self._embed_btn=ctk.CTkButton(btn_f,text="📋  Embed",width=90,height=32,
+            font=ctk.CTkFont("Segoe UI",11,"bold"),
+            fg_color=BG3,hover_color=BG4,text_color=TXT2,
+            border_width=1,border_color=GLASS_BDR,corner_radius=8,
+            command=self._open_embed)
+        self._embed_btn.pack(side="left")
+
+        # UPLOAD ZONE — taller (2 rows of thumbs = 200px)
         ws=ctk.CTkFrame(main,fg_color=GLASS,corner_radius=12,
             border_width=1,border_color=GLASS_BDR)
         ws.grid(row=1,column=0,sticky="ew",padx=8,pady=(6,4))
         ws.grid_columnconfigure(0,weight=1)
-        ws.grid_rowconfigure(0,weight=1)
 
-        # Scrollable inner container for thumbnails — horizontal scroll
         self._thumb_scroll=ctk.CTkScrollableFrame(ws,
-            fg_color=BG3,corner_radius=8,
-            orientation="horizontal",
-            scrollbar_button_color=BG4,
-            scrollbar_button_hover_color=GLASS_BDR,
-            height=110)
+            fg_color=BG3,corner_radius=8,orientation="horizontal",
+            scrollbar_button_color=BG4,scrollbar_button_hover_color=GLASS_BDR,
+            height=200)
         self._thumb_scroll.grid(row=0,column=0,sticky="ew",padx=8,pady=8)
-        self._thumb_scroll.grid_columnconfigure(0,weight=1)
-        # _thumb_grid is the inner frame we place cells into
         self._thumb_grid=self._thumb_scroll
 
         self._ws_empty=ctk.CTkLabel(self._thumb_scroll,
             text="BROWSE\n\n🖼️   🎬   ✦\n\nDrag & drop files here or click to browse\nJPG · PNG · GIF · WEBP · TIFF · SVG · EPS · MP4 · MOV",
-            font=ctk.CTkFont("Segoe UI",13,"bold"),
+            font=ctk.CTkFont("Segoe UI",14,"bold"),
             text_color=TXT2,fg_color=BG3,justify="center",anchor="center")
         self._ws_empty.pack(expand=True,fill="both")
 
-        # Bind clicks to browse on all ws surfaces
         for w in (ws,self._thumb_scroll,self._ws_empty):
             w.bind("<Button-1>",lambda e:self._browse_images())
-        # Also bind on the scrollable frame's internal canvas
         try:
-            self._thumb_scroll._parent_canvas.bind(
-                "<Button-1>",lambda e:self._browse_images())
+            self._thumb_scroll._parent_canvas.bind("<Button-1>",lambda e:self._browse_images())
         except: pass
 
         if DND_AVAILABLE:
@@ -1556,72 +1677,65 @@ class App(DnDCTk):
                     w.dnd_bind("<<Drop>>",self._on_drop)
                 except: pass
             try:
-                self._thumb_scroll._parent_canvas.drop_target_register(DND_FILES)
-                self._thumb_scroll._parent_canvas.dnd_bind("<<DropEnter>>",self._on_drag_enter)
-                self._thumb_scroll._parent_canvas.dnd_bind("<<DropLeave>>",self._on_drag_leave)
-                self._thumb_scroll._parent_canvas.dnd_bind("<<Drop>>",self._on_drop)
+                cv=self._thumb_scroll._parent_canvas
+                cv.drop_target_register(DND_FILES)
+                cv.dnd_bind("<<DropEnter>>",self._on_drag_enter)
+                cv.dnd_bind("<<DropLeave>>",self._on_drag_leave)
+                cv.dnd_bind("<<Drop>>",self._on_drop)
             except: pass
 
-        # Progress bar row
-        prog=ctk.CTkFrame(main,fg_color=BG1,corner_radius=0,height=30)
+        # Progress bar
+        prog=ctk.CTkFrame(main,fg_color=BG1,corner_radius=0,height=28)
         prog.grid(row=2,column=0,sticky="ew"); prog.grid_propagate(False)
         prog.grid_columnconfigure(1,weight=1)
         self._prog_lbl=ctk.CTkLabel(prog,text="● System Ready.",
             font=ctk.CTkFont("Segoe UI",10),text_color=TXT3,fg_color=BG1)
-        self._prog_lbl.grid(row=0,column=0,padx=(10,8),pady=5)
-        self._prog_bar=ctk.CTkProgressBar(prog,progress_color=GRN,fg_color=BG3,
-            height=6,corner_radius=3)
-        self._prog_bar.grid(row=0,column=1,sticky="ew",pady=12,padx=(0,8)); self._prog_bar.set(0)
+        self._prog_lbl.grid(row=0,column=0,padx=(10,8),pady=4)
+        self._prog_bar=ctk.CTkProgressBar(prog,progress_color=GRN,fg_color=BG3,height=6,corner_radius=3)
+        self._prog_bar.grid(row=0,column=1,sticky="ew",pady=10,padx=(0,8)); self._prog_bar.set(0)
         self._prog_pct=ctk.CTkLabel(prog,text="",font=ctk.CTkFont("Segoe UI",10,"bold"),
-            text_color=GRN,fg_color=BG1,width=40)
-        self._prog_pct.grid(row=0,column=2,padx=(0,10))
+            text_color=GRN,fg_color=BG1,width=36)
+        self._prog_pct.grid(row=0,column=2,padx=(0,8))
 
-        # Generated Metadata section
+        # Generated Metadata section — 2x grid, 4 cards visible
         gen=ctk.CTkFrame(main,fg_color=GLASS,corner_radius=12,
             border_width=1,border_color=GLASS_BDR)
         gen.grid(row=3,column=0,sticky="nsew",padx=8,pady=(0,8))
         gen.grid_columnconfigure(0,weight=1); gen.grid_rowconfigure(1,weight=1)
-        gen_hdr=ctk.CTkFrame(gen,fg_color="transparent",corner_radius=0,height=42)
-        gen_hdr.grid(row=0,column=0,sticky="ew",padx=14,pady=(10,0))
+
+        gen_hdr=ctk.CTkFrame(gen,fg_color="transparent",corner_radius=0,height=38)
+        gen_hdr.grid(row=0,column=0,sticky="ew",padx=12,pady=(8,0))
         gen_hdr.grid_propagate(False); gen_hdr.grid_columnconfigure(0,weight=1)
         self._gen_count_lbl=ctk.CTkLabel(gen_hdr,text="Generated Metadata (0)",
-            font=ctk.CTkFont("Segoe UI",13,"bold"),text_color=TXT,fg_color="transparent")
+            font=ctk.CTkFont("Segoe UI",12,"bold"),text_color=TXT,fg_color="transparent")
         self._gen_count_lbl.grid(row=0,column=0,sticky="w")
+
         self._gen_scroll=ctk.CTkScrollableFrame(gen,fg_color="transparent",
             scrollbar_button_color=BG3,scrollbar_button_hover_color=BG4,corner_radius=0)
-        self._gen_scroll.grid(row=1,column=0,sticky="nsew",padx=8,pady=(6,8))
+        self._gen_scroll.grid(row=1,column=0,sticky="nsew",padx=6,pady=(4,6))
         self._gen_scroll.grid_columnconfigure(0,weight=1)
+        self._gen_scroll.grid_columnconfigure(1,weight=1)
+
         self._gen_empty_lbl=ctk.CTkLabel(self._gen_scroll,
             text="Results will appear here after generation.",
             font=ctk.CTkFont("Segoe UI",12),text_color=TXT3,fg_color="transparent")
-        self._gen_empty_lbl.grid(row=0,column=0,pady=40)
+        self._gen_empty_lbl.grid(row=0,column=0,columnspan=2,pady=40)
 
-    def _sel_platform(self,plat):
-        self._cur_platform=plat
-        rules=PLATFORM_RULES.get(plat,{})
-        kw_val=min(rules.get("kw",49),49)
-        for var,sl,val in [(self.ai_title_var,self._title_sl,rules.get("title",130)),
-                           (self.ai_desc_var,self._desc_sl,rules.get("desc",200)),
-                           (self.ai_kw_var,self._kw_sl,kw_val)]:
-            var.set(str(val)); sl.set(val)
-            lbl=getattr(sl,"_value_label",None)
-            if lbl: lbl.configure(text=str(val))
-        for p,btn in self._plat_btns.items():
-            btn.configure(fg_color=GRN if p==plat else BG3,
-                text_color=ABSOLUTE_BG if p==plat else TXT2,
-                border_color=GRN if p==plat else GLASS_BDR)
-        self._save_settings()
+    def _open_embed(self):
+        # Pass the last generated CSV path if available
+        EmbedWindow(self, csv_path=getattr(self,"_last_csv_path",None))
 
     # ── DnD ────────────────────────────────────────────────────────
     def _on_drag_enter(self,event):
-        # Only highlight the outer frame — don't touch label bg to avoid black box artifact
         self._thumb_scroll.configure(fg_color=GRN_DIM)
-        self._ws_empty.configure(text_color=GRN,fg_color=GRN_DIM)
+        self._ws_empty.configure(fg_color=GRN_DIM,text_color=GRN)
         return event.action
+
     def _on_drag_leave(self,event):
         self._thumb_scroll.configure(fg_color=BG3)
-        self._ws_empty.configure(text_color=TXT2,fg_color=BG3)
+        self._ws_empty.configure(fg_color=BG3,text_color=TXT2)
         return event.action
+
     def _on_drop(self,event):
         self._on_drag_leave(event)
         raw=event.data
@@ -1638,7 +1752,7 @@ class App(DnDCTk):
             elif os.path.isfile(p): expanded.append(p)
         self._add_images(expanded)
 
-    # ── Image import ────────────────────────────────────────────────
+    # ── Image import ───────────────────────────────────────────────
     def _browse_images(self):
         paths=filedialog.askopenfilenames(title="Select images",
             filetypes=[("Supported","*.jpg *.jpeg *.png *.webp *.gif *.tiff *.tif *.svg *.eps *.mp4 *.mov"),
@@ -1650,9 +1764,7 @@ class App(DnDCTk):
         new=[p for p in paths if p not in existing
              and os.path.splitext(p)[1].lower() in ALL_SUPPORTED_EXTS]
         if not new: return
-        # Track source folder for CSV naming
-        if new and not self._source_folder:
-            self._source_folder=os.path.dirname(new[0])
+        if not self._source_folder: self._source_folder=os.path.dirname(new[0])
         for p in new:
             self._all_paths.append(p); self._results[p]={"status":"waiting"}
         self._rebuild_thumb_grid()
@@ -1660,48 +1772,34 @@ class App(DnDCTk):
         self._update_progress()
 
     def _rebuild_thumb_grid(self):
-        # Destroy all thumb cells (not the empty label — it's managed separately)
         for w in self._thumb_grid.winfo_children():
             if w is not self._ws_empty:
                 try: w.destroy()
                 except: pass
-
         total=len(self._all_paths)
         if total==0:
-            self._ws_empty.pack(expand=True,fill="both",padx=20,pady=12)
-            return
+            self._ws_empty.pack(expand=True,fill="both"); return
         self._ws_empty.pack_forget()
-
-        CELL=90
+        CELL=96  # 2 rows fit in 200px height
         for i,path in enumerate(self._all_paths):
-            cell=ctk.CTkFrame(self._thumb_grid,fg_color=BG4,
-                corner_radius=4,width=CELL,height=CELL)
+            cell=ctk.CTkFrame(self._thumb_grid,fg_color=BG4,corner_radius=4,width=CELL,height=CELL)
             cell.pack(side="left",padx=(0,2))
             cell.pack_propagate(False)
-
-            lbl=ctk.CTkLabel(cell,text="⟳",
-                font=ctk.CTkFont("Segoe UI",11),
-                fg_color=BG4,text_color=TXT3,
-                width=CELL,height=CELL,corner_radius=4)
+            lbl=ctk.CTkLabel(cell,text="⟳",font=ctk.CTkFont("Segoe UI",11),
+                fg_color=BG4,text_color=TXT3,width=CELL,height=CELL,corner_radius=4)
             lbl.place(relx=0.5,rely=0.5,anchor="center")
-
-            # Status dot overlay
             st=self._results.get(path,{}).get("status","waiting")
-            dot_text= "✓" if st=="done" else ("✗" if st=="failed" else "")
-            dot_bg  = GRN_DIM if st=="done" else (RED_DIM if st=="failed" else "")
-            dot_fg  = GRN if st=="done" else (RED_BTN if st=="failed" else "")
-            if dot_text:
-                dot=ctk.CTkLabel(cell,text=dot_text,
+            if st in ("done","failed"):
+                dot=ctk.CTkLabel(cell,text="✓" if st=="done" else "✗",
                     font=ctk.CTkFont("Segoe UI",8,"bold"),
-                    fg_color=dot_bg,text_color=dot_fg,
+                    fg_color=GRN_DIM if st=="done" else RED_DIM,
+                    text_color=GRN if st=="done" else RED_BTN,
                     corner_radius=8,width=14,height=14)
                 dot.place(relx=1.0,rely=0.0,anchor="ne",x=-2,y=2)
-
             def _load(p=path,l=lbl):
                 img=make_thumb(p,(CELL-4,CELL-4))
                 if img: self._thumb_queue.put((l,img))
             threading.Thread(target=_load,daemon=True).start()
-
 
     def _update_progress(self,done=None,total=None,msg=None):
         t=total or len(self._all_paths)
@@ -1714,7 +1812,7 @@ class App(DnDCTk):
             text=msg or f"Generated {d}/{t}  |  {d} successful  |  {failed} failed",
             text_color=TXT2)
         pct=d/t if t else 0
-        self._prog_bar.set(pct); self._prog_pct.configure(text=f"{int(pct*100)}%" if t else "")
+        self._prog_bar.set(pct); self._prog_pct.configure(text=f"{int(pct*100)}%")
         self.p_ok.configure(text=f"✓  {d} done")
         self.p_err.configure(text=f"✗  {failed} failed")
         self.p_pend.configure(text=f"○  {t-d-failed} pending")
@@ -1724,7 +1822,8 @@ class App(DnDCTk):
         if confirm and self._all_paths:
             if not messagebox.askyesno("Clear","Remove all files and results?"): return
         self._all_paths.clear(); self._results.clear(); self._source_folder=""
-        self._clear_results(); self._rebuild_thumb_grid()
+        self._clear_results()
+        self._rebuild_thumb_grid()
         self._gen_btn.configure(text="✨  Generate (0)")
         self._update_progress()
 
@@ -1734,22 +1833,50 @@ class App(DnDCTk):
             except: pass
         self._result_cards=[]
         self._gen_count_lbl.configure(text="Generated Metadata (0)")
-        self._gen_empty_lbl.grid(row=0,column=0,pady=40)
+        self._gen_empty_lbl.grid(row=0,column=0,columnspan=2,pady=40)
 
     def _add_result_card(self,path):
         if self._gen_empty_lbl.winfo_viewable():
             self._gen_empty_lbl.grid_remove()
         res=self._results.get(path,{})
         idx=len(self._result_cards)
-        card=MetaResultCard(self._gen_scroll,path,res,on_redo=lambda p=path:self._redo_single(p),mode=self.current_mode)
-        card.grid(row=idx,column=0,sticky="ew",padx=4,pady=(0,6))
+        # 2-column grid layout
+        r,c=idx//2,idx%2
+        card=MetaResultCard(self._gen_scroll,path,res,
+            on_redo=lambda p=path:self._redo_single(p),mode=self.current_mode)
+        card.grid(row=r,column=c,sticky="ew",
+            padx=(4,2) if c==0 else (2,4),pady=(0,6))
         self._result_cards.append(card)
         done=sum(1 for r in self._results.values() if r.get("status")=="done")
         self._gen_count_lbl.configure(text=f"Generated Metadata ({done})")
         try: self._gen_scroll._parent_canvas.yview_moveto(1.0)
         except: pass
 
-    # ── GENERATE (concurrent) ─────────────────────────────────────
+    # ── Pause / Stop ───────────────────────────────────────────────
+    def _pause_ai(self):
+        if not self.ai_running: return
+        self._ai_paused=not self._ai_paused
+        if self._ai_paused:
+            self._pause_btn.configure(text="▶  Resume",fg_color=GRN_DIM,text_color=GRN)
+            self.set_status("⏸  Paused",AMB_BTN)
+        else:
+            self._pause_btn.configure(text="⏸  Pause",fg_color=AMB_DIM,text_color=AMB_BTN)
+            self.set_status("▶  Resuming…",GRN)
+
+    def _stop_ai_now(self):
+        self.ai_stop_flag=True; self._ai_paused=False
+        self.set_status("■  Stopped",RED_BTN)
+
+    def _retry_failed(self):
+        if self.ai_running: return
+        failed=[p for p in self._all_paths if self._results.get(p,{}).get("status")=="failed"]
+        if not failed: return
+        for p in failed: self._results[p]={"status":"waiting"}
+        try: self._retry_btn.pack_forget()
+        except: pass
+        self.start_generate()
+
+    # ── Generate ───────────────────────────────────────────────────
     def start_generate(self):
         if self.ai_running: messagebox.showwarning("Busy","Already generating."); return
         if not self._all_paths: messagebox.showerror("No Images","Add images first."); return
@@ -1757,9 +1884,8 @@ class App(DnDCTk):
             messagebox.showerror("No API Keys","Open 'API Configuration'."); return
         self.ai_running=True; self.ai_stop_flag=False; self._ai_paused=False
         self._gen_btn.configure(state="disabled",text="⟳  Generating…")
-        # Show pause/stop, hide retry
         self._pause_btn.pack(side="left",padx=(0,4),before=self._gen_btn)
-        self._stop_btn.pack(side="left",padx=(0,6),before=self._gen_btn)
+        self._stop_btn.pack(side="left",padx=(0,5),before=self._gen_btn)
         try: self._retry_btn.pack_forget()
         except: pass
         targets=[p for p in self._all_paths
@@ -1772,12 +1898,11 @@ class App(DnDCTk):
         mode=self.current_mode
         custom=self.ai_custom_var.get()
         single_kw=self.ai_single_kw_var.get()
-        avoid_copyright=self.ai_avoid_copyright_var.get()
+        avoid_copyright=self.ai_avoid_copy_var.get()
         themes=", ".join(s for s,v in self._style_vars.items() if v.get())
-        prefix=(self.ai_prefix_text_var.get().strip()
-                if self.ai_prefix_on_var.get() else "")
-        suffix_title=(self.ai_suffix_text_var.get().strip()
-                      if self.ai_suffix_on_var.get() else "")
+        # Only apply prefix/suffix if their toggles are ON
+        prefix=self.ai_prefix_text_var.get().strip() if self.ai_prefix_on_var.get() else ""
+        suffix_title=self.ai_suffix_text_var.get().strip() if self.ai_suffix_on_var.get() else ""
         concurrency=max(1,min(4,int(self.ai_concurrency_var.get())))
 
         if mode=="meta":
@@ -1792,13 +1917,11 @@ class App(DnDCTk):
         total=len(targets); done_count=0
         worker_sem=threading.Semaphore(concurrency)
         lock=threading.Lock()
-        finished=threading.Event()
-        remaining=[total]
+        remaining=[total]; finished=threading.Event()
 
         def process_one(path,i):
             nonlocal done_count
             try:
-                # Wait while paused
                 while getattr(self,"_ai_paused",False) and not self.ai_stop_flag:
                     import time; time.sleep(0.3)
                 if self.ai_stop_flag: return
@@ -1810,25 +1933,25 @@ class App(DnDCTk):
                 try:
                     ext=os.path.splitext(path)[1].lower()
                     if ext in VECTOR_EXTS or ext in VIDEO_EXTS:
-                        raise ValueError("Vector/video: needs JPG preview")
-                    raw,provider,model_id,key_idx=call_with_failover(
-                        path,prompt,self.prefs,
-                        status_cb=lambda msg:self.after(0,
-                            lambda m=msg:self.set_status(f"⟳  {m}",GRN)))
-                    model_used=(f"⚙ {provider} · {model_label(provider,model_id)}"
-                                +(f" ({key_idx})" if key_idx else ""))
+                        raise ValueError("Vector/video: convert to JPG first")
+                    raw,provider,model_id,key_idx=call_with_failover(path,prompt,self.prefs,
+                        status_cb=lambda msg:self.after(0,lambda m=msg:self.set_status(f"⟳  {m}",GRN)))
+                    model_used=f"⚙ {provider} · {model_label(provider,model_id)}" + \
+                               (f" ({key_idx})" if key_idx else "")
                     if mode=="meta":
                         title,desc,kw=parse_meta(raw)
-                        # Apply prefix/suffix to title
-                        if prefix and not title.startswith(prefix):
-                            title=prefix+" "+title
-                        if suffix_title and not title.endswith(suffix_title):
-                            title=title+" "+suffix_title
+                        # Apply prefix ONCE — check it's not already there
+                        if prefix:
+                            if not title.lower().startswith(prefix.lower()):
+                                title=prefix+" "+title
+                        # Apply suffix ONCE — check it's not already there
+                        if suffix_title:
+                            if not title.lower().endswith(suffix_title.lower()):
+                                title=title+" "+suffix_title
                         # Trim to char limit
-                        if len(title)>tc: title=title[:tc].rsplit(" ",1)[0]
+                        if len(title)>tc: title=title[:tc].rsplit(" ",1)[0].strip()
                         if single_kw: kw=enforce_single_keywords(kw)
-                        if avoid_copyright:
-                            kw=_strip_copyright_keywords(kw)
+                        if avoid_copyright: kw=_strip_copyright_keywords(kw)
                         self._results[path]={
                             "status":"done","title":title,"desc":desc,
                             "kw":kw,"model_used":model_used}
@@ -1852,11 +1975,8 @@ class App(DnDCTk):
         for i,path in enumerate(targets):
             if self.ai_stop_flag: break
             worker_sem.acquire()
-            t=threading.Thread(target=process_one,args=(path,i),daemon=True)
-            t.start()
+            threading.Thread(target=process_one,args=(path,i),daemon=True).start()
 
-        # Signal remaining threads to finish
-        # Wait for all workers
         finished.wait(timeout=3600)
         self.after(0,self._gen_done)
 
@@ -1866,44 +1986,76 @@ class App(DnDCTk):
         done=sum(1 for r in self._results.values() if r.get("status")=="done")
         failed=sum(1 for r in self._results.values() if r.get("status")=="failed")
         self._gen_btn.configure(state="normal",text=f"✨  Generate ({total})")
-        # Hide pause/stop
         try: self._pause_btn.pack_forget()
         except: pass
         try: self._stop_btn.pack_forget()
         except: pass
         self._pause_btn.configure(text="⏸  Pause",fg_color=AMB_DIM,text_color=AMB_BTN)
-        # Show retry if failures
         if failed>0:
-            self._retry_btn.pack(side="left",padx=(0,6),before=self._gen_btn)
+            self._retry_btn.pack(side="left",padx=(0,5),before=self._gen_btn)
         self.set_status(f"● Done — {done} generated · {failed} failed",
                         GRN if failed==0 else AMB_BTN)
         self._update_progress(done=done,total=total)
         self._rebuild_thumb_grid()
+        # Auto-save CSV
+        if done>0: self._auto_save_csv()
+
+    def _auto_save_csv(self):
+        """Save CSV silently to the source folder with #foldername naming."""
+        try:
+            done_paths=[p for p in self._all_paths if self._results.get(p,{}).get("status")=="done"]
+            if not done_paths: return
+            folder_name=os.path.basename(self._source_folder) if self._source_folder else "export"
+            out_path=os.path.join(self._source_folder,f"#{folder_name}.csv")
+            mode=self.current_mode
+            fields=["Filename","Title","Description","Keywords"] if mode=="meta" else ["Filename","Prompt"]
+            def row_for(p):
+                r=self._results[p]; fn=os.path.basename(p)
+                if mode=="meta":
+                    return {"Filename":fn,"Title":r.get("title",""),
+                            "Description":r.get("desc",""),"Keywords":r.get("kw","")}
+                return {"Filename":fn,"Prompt":r.get("prompt","")}
+            with open(out_path,'w',newline='',encoding='utf-8-sig') as f:
+                w=csv.DictWriter(f,fieldnames=fields); w.writeheader()
+                w.writerows(row_for(p) for p in done_paths)
+            self._last_csv_path=out_path
+            self.set_status(f"✓  Auto-saved → #{folder_name}.csv",GRN)
+        except Exception: pass
 
     def _redo_single(self,path):
         if self.ai_running: return
+        # Remove old card
+        for i,c in enumerate(self._result_cards):
+            if c.path==path:
+                c.destroy(); self._result_cards.pop(i); break
+        # Re-grid remaining cards
+        for i,c in enumerate(self._result_cards):
+            r,col=i//2,i%2
+            c.grid(row=r,column=col,sticky="ew",
+                padx=(4,2) if col==0 else (2,4),pady=(0,6))
+        if not self._result_cards:
+            self._gen_empty_lbl.grid(row=0,column=0,columnspan=2,pady=40)
         self._results[path]={"status":"waiting"}
-        self._result_cards=[c for c in self._result_cards if c.path!=path]
-        self.ai_running=True; self.ai_stop_flag=False
+        self.ai_running=True; self.ai_stop_flag=False; self._ai_paused=False
         self._gen_btn.configure(state="disabled")
+        self._pause_btn.pack(side="left",padx=(0,4),before=self._gen_btn)
+        self._stop_btn.pack(side="left",padx=(0,5),before=self._gen_btn)
         threading.Thread(target=self._gen_thread,args=([path],),daemon=True).start()
 
-    # ── EXPORT ─────────────────────────────────────────────────────
     def _export_csv(self):
         done=[p for p in self._all_paths if self._results.get(p,{}).get("status")=="done"]
         if not done: messagebox.showinfo("No Results","No generated results yet."); return
-        # CSV filename: #foldername
         folder_name=os.path.basename(self._source_folder) if self._source_folder else "export"
-        ts=datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name=f"#{folder_name}.csv"
         path=filedialog.asksaveasfilename(defaultextension=".csv",
-            filetypes=[("CSV","*.csv")],initialfile=default_name)
+            filetypes=[("CSV","*.csv")],initialfile=f"#{folder_name}.csv")
         if not path: return
         try:
             mode=self.current_mode
-            fields=(["Filename","Title","Description","Keywords"]
-                    if mode=="meta" else ["Filename","Prompt"])
+            fields=["Filename","Title","Description","Keywords"] if mode=="meta" else ["Filename","Prompt"]
             def row_for(p):
+                # Read latest from card boxes if available
+                for card in self._result_cards:
+                    if card.path==p: return card.get_result()
                 r=self._results[p]; fn=os.path.basename(p)
                 if mode=="meta":
                     return {"Filename":fn,"Title":r.get("title",""),
@@ -1912,290 +2064,15 @@ class App(DnDCTk):
             with open(path,'w',newline='',encoding='utf-8-sig') as f:
                 w=csv.DictWriter(f,fieldnames=fields); w.writeheader()
                 w.writerows(row_for(p) for p in done)
+            self._last_csv_path=path
             self.set_status(f"✓  CSV saved — {len(done)} rows",GRN)
             messagebox.showinfo("Saved",f"CSV saved:\n{path}")
         except Exception as e: messagebox.showerror("Error",str(e))
 
-    def _download_zip(self):
-        done=[p for p in self._all_paths if self._results.get(p,{}).get("status")=="done"]
-        if not done: messagebox.showinfo("No Results","No generated results yet."); return
-        import zipfile,pathlib
-        downloads=pathlib.Path.home()/"Downloads"; downloads.mkdir(exist_ok=True)
-        folder_name=os.path.basename(self._source_folder) if self._source_folder else "export"
-        out=downloads/f"#{folder_name}.zip"
-        try:
-            with zipfile.ZipFile(out,"w",zipfile.ZIP_STORED) as zf:
-                for p in done: zf.write(p,os.path.basename(p))
-            self.set_status(f"✓  ZIP saved → Downloads/{out.name}",GRN)
-            messagebox.showinfo("ZIP Saved",f"Saved {len(done)} files to:\n{out}")
-        except Exception as e: messagebox.showerror("ZIP Error",str(e))
-
-    # ══════════════════════════════════════════════════════════════
-    #  EMBED TAB
-    # ══════════════════════════════════════════════════════════════
-    def _build_embed_tab(self,parent):
-        parent.grid_columnconfigure(0,weight=1); parent.grid_columnconfigure(1,weight=0)
-        parent.grid_rowconfigure(0,weight=1)
-        left=ctk.CTkScrollableFrame(parent,fg_color=BG1,scrollbar_button_color=BG3,corner_radius=0)
-        left.grid(row=0,column=0,sticky="nsew",padx=(14,6),pady=12)
-        left.grid_columnconfigure(0,weight=1); self._el=left
-        log_outer=ctk.CTkFrame(parent,fg_color=BG2,corner_radius=16,
-            border_width=1,border_color=GLASS_BDR,width=220)
-        log_outer.grid(row=0,column=1,sticky="nsew",padx=(0,10),pady=10)
-        log_outer.grid_propagate(False); log_outer.grid_rowconfigure(1,weight=1)
-        log_outer.grid_columnconfigure(0,weight=1)
-        self._build_embed_log(log_outer)
-        self._build_emb_actions(); self._build_csv_card()
-        self._build_folder_card(); self._build_map_card()
-
-    def _ec(self):
-        f=ctk.CTkFrame(self._el,fg_color=GLASS,corner_radius=12,
-            border_width=1,border_color=GLASS_BDR)
-        f.pack(fill="x",pady=(0,10)); f.grid_columnconfigure(0,weight=1); return f
-
-    def _ech(self,p,num,title,bcmd=None):
-        h=ctk.CTkFrame(p,fg_color=BG3,corner_radius=12,height=52)
-        h.pack(fill="x"); h.grid_propagate(False); h.grid_columnconfigure(1,weight=1)
-        ctk.CTkLabel(h,text=str(num),font=ctk.CTkFont("Segoe UI",12,"bold"),
-            fg_color=GRN,text_color=ABSOLUTE_BG,corner_radius=50,width=36,height=36
-        ).grid(row=0,column=0,padx=(14,10),pady=8)
-        ctk.CTkLabel(h,text=title,font=ctk.CTkFont("Segoe UI",13,"bold"),
-            text_color=TXT2,fg_color=BG3).grid(row=0,column=1,sticky="w")
-        if bcmd:
-            ctk.CTkButton(h,text="Browse",width=98,height=34,
-                font=ctk.CTkFont("Segoe UI",12,"bold"),
-                fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,
-                corner_radius=20,command=bcmd).grid(row=0,column=2,padx=(0,12),pady=9)
-
-    def _esw(self,p,t,v):
-        return ctk.CTkSwitch(p,text=t,variable=v,font=ctk.CTkFont("Segoe UI",12),
-            progress_color=GRN,button_color=TXT,text_color=TXT2,
-            fg_color=GLASS_BDR,onvalue=True,offvalue=False,width=56,height=28)
-
-    def _build_emb_actions(self):
-        row=ctk.CTkFrame(self._el,fg_color=BG1,corner_radius=0)
-        row.pack(fill="x",pady=(0,10)); row.grid_columnconfigure(0,weight=1)
-        self.embed_btn=ctk.CTkButton(row,text="▶  Start Embedding",
-            font=ctk.CTkFont("Segoe UI",15,"bold"),
-            fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,
-            height=54,corner_radius=27,command=self.start_embed)
-        self.embed_btn.grid(row=0,column=0,sticky="ew")
-        ctk.CTkButton(row,text="↺",width=54,height=54,
-            font=ctk.CTkFont("Segoe UI",20,"bold"),
-            fg_color=RED_DIM,hover_color=RED_BTN_H,text_color=RED_BTN,
-            corner_radius=27,command=self.reset_embed).grid(row=0,column=1,padx=(8,0))
-        ctk.CTkButton(row,text="💾  Save Log",width=136,height=54,
-            font=ctk.CTkFont("Segoe UI",12,"bold"),
-            fg_color=BG3,hover_color=BG4,text_color=TXT2,
-            corner_radius=27,command=self.export_log).grid(row=0,column=2,padx=(8,0))
-
-    def _build_csv_card(self):
-        c=self._ec(); self._ech(c,"1","Load CSV",self.load_csv)
-        body=ctk.CTkFrame(c,fg_color=GLASS,corner_radius=0)
-        body.pack(fill="x",padx=14,pady=(10,12)); body.grid_columnconfigure(0,weight=1)
-        ctk.CTkEntry(body,textvariable=self.csv_path_var,state="readonly",height=40,
-            font=ctk.CTkFont("Segoe UI",12),fg_color=BG3,text_color=TXT,
-            border_color=GLASS_BDR,corner_radius=12).pack(fill="x",pady=(0,10))
-        row=ctk.CTkFrame(body,fg_color=GLASS,corner_radius=0); row.pack(fill="x")
-        row.grid_columnconfigure(0,weight=1)
-        self.csv_badge=ctk.CTkLabel(row,text="No CSV loaded",
-            font=ctk.CTkFont("Segoe UI",11,"bold"),
-            fg_color=BG3,text_color=TXT3,corner_radius=12,padx=12,pady=5)
-        self.csv_badge.grid(row=0,column=0,sticky="w")
-        self._esw(row,"Match Filename Only",self.match_only_var).grid(row=0,column=1,sticky="e",padx=(10,0))
-
-    def _build_folder_card(self):
-        c=self._ec(); self._ech(c,"2","Image Folder",self.browse_embed_folder)
-        body=ctk.CTkFrame(c,fg_color=GLASS,corner_radius=0)
-        body.pack(fill="x",padx=14,pady=(10,12)); body.grid_columnconfigure(0,weight=1)
-        ctk.CTkEntry(body,textvariable=self.folder_path_var,state="readonly",height=40,
-            font=ctk.CTkFont("Segoe UI",12),fg_color=BG3,text_color=TXT,
-            border_color=GLASS_BDR,corner_radius=12).pack(fill="x",pady=(0,10))
-        row=ctk.CTkFrame(body,fg_color=GLASS,corner_radius=0); row.pack(fill="x")
-        row.grid_columnconfigure(0,weight=1)
-        self.folder_badge=ctk.CTkLabel(row,text="No folder selected",
-            font=ctk.CTkFont("Segoe UI",11,"bold"),
-            fg_color=BG3,text_color=TXT3,corner_radius=12,padx=12,pady=5)
-        self.folder_badge.grid(row=0,column=0,sticky="w")
-        self._esw(row,"Include Sub-Folders",self.subfolder_var).grid(row=0,column=1,sticky="e",padx=(10,0))
-
-    def _build_map_card(self):
-        c=self._ec(); self._ech(c,"3","Map Columns")
-        body=ctk.CTkFrame(c,fg_color=GLASS,corner_radius=0)
-        body.pack(fill="x",padx=14,pady=(10,12))
-        body.grid_columnconfigure(0,weight=1); body.grid_columnconfigure(1,weight=1)
-        ctk.CTkLabel(body,text="Auto-detected from column names.",
-            font=ctk.CTkFont("Segoe UI",11),text_color=TXT3,fg_color=GLASS
-        ).grid(row=0,column=0,columnspan=2,sticky="w",pady=(0,8))
-        self.col_combos={}
-        for i,(lbl,var) in enumerate([("FILENAME",self.col_file_var),("TITLE",self.col_title_var),
-                                       ("KEYWORDS",self.col_kw_var),("DESCRIPTION",self.col_desc_var)]):
-            r=(i//2)+1; col=i%2
-            cell=ctk.CTkFrame(body,fg_color=GLASS,corner_radius=0)
-            cell.grid(row=r,column=col,sticky="ew",padx=(0 if col==0 else 8,0),pady=4)
-            cell.grid_columnconfigure(0,weight=1)
-            ctk.CTkLabel(cell,text=lbl,font=ctk.CTkFont("Segoe UI",10,"bold"),
-                text_color=TXT3,fg_color=GLASS).pack(anchor="w")
-            cb=ctk.CTkComboBox(cell,variable=var,values=["(skip)"],state="readonly",
-                font=ctk.CTkFont("Segoe UI",12),fg_color=BG3,text_color=TXT,
-                border_color=GLASS_BDR,button_color=GRN,button_hover_color=GRN_H,
-                dropdown_fg_color=BG3,dropdown_text_color=TXT,dropdown_hover_color=BG4,
-                corner_radius=12,height=38,command=lambda v:self._update_match())
-            cb.pack(fill="x",pady=(4,0)); self.col_combos[lbl]=cb
-        ctk.CTkFrame(body,fg_color=GLASS_BDR,height=1,corner_radius=0).grid(
-            row=3,column=0,columnspan=2,sticky="ew",pady=(12,8))
-        rm=ctk.CTkFrame(body,fg_color=BG3,corner_radius=12)
-        rm.grid(row=4,column=0,columnspan=2,sticky="ew",pady=(0,4)); rm.grid_columnconfigure(0,weight=1)
-        info=ctk.CTkFrame(rm,fg_color=BG3,corner_radius=0)
-        info.grid(row=0,column=0,sticky="w",padx=14,pady=12)
-        ctk.CTkLabel(info,text="Remove Program Name",font=ctk.CTkFont("Segoe UI",13,"bold"),
-            text_color=TXT2,fg_color=BG3).pack(anchor="w")
-        ctk.CTkLabel(info,text="Clears upscaler/software name from metadata",
-            font=ctk.CTkFont("Segoe UI",11),text_color=TXT3,fg_color=BG3).pack(anchor="w")
-        self._esw(rm,"On",self.rm_prog_var).grid(row=0,column=1,padx=(0,14),pady=12)
-
-    def _build_embed_log(self,parent):
-        hdr=ctk.CTkFrame(parent,fg_color=BG3,corner_radius=12,height=44)
-        hdr.grid(row=0,column=0,sticky="ew",padx=8,pady=(8,4)); hdr.grid_propagate(False)
-        hdr.grid_columnconfigure(0,weight=1)
-        ctk.CTkLabel(hdr,text="ACTIVITY LOG",font=ctk.CTkFont("Segoe UI",11,"bold"),
-            text_color=TXT3,fg_color=BG3).grid(row=0,column=0,sticky="w",padx=12)
-        ctk.CTkButton(hdr,text="Clear",width=58,height=28,fg_color=BG1,hover_color=BG4,
-            text_color=TXT3,corner_radius=12,command=self.clear_log
-        ).grid(row=0,column=1,padx=(0,8))
-        self.log_text=ctk.CTkTextbox(parent,font=ctk.CTkFont("Consolas",11),
-            fg_color=LOG_BG,text_color=TXT,corner_radius=12,wrap="word",state="disabled",
-            scrollbar_button_color=BG3,scrollbar_button_hover_color=BG4)
-        self.log_text.grid(row=1,column=0,sticky="nsew",padx=8,pady=(0,8))
-
-    def log(self,msg):
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end",f"{self.ts()}   {msg}\n")
-        self.log_text.see("end"); self.log_text.configure(state="disabled")
-
-    def clear_log(self):
-        self.log_text.configure(state="normal"); self.log_text.delete("1.0","end")
-        self.log_text.configure(state="disabled")
-
-    def export_log(self):
-        content=self.log_text.get("1.0","end").strip()
-        if not content: messagebox.showinfo("Log","Empty."); return
-        p=filedialog.asksaveasfilename(defaultextension=".txt",filetypes=[("Text","*.txt")],
-            initialfile=f"log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-        if p:
-            with open(p,'w',encoding='utf-8') as f: f.write(content)
-            self.log(f"✓  Saved → {os.path.basename(p)}")
-
-    def load_csv(self):
-        p=filedialog.askopenfilename(title="Select CSV",filetypes=[("CSV","*.csv"),("All","*.*")])
-        if p: self._do_load_csv(p)
-
-    def _do_load_csv(self,path):
-        try:
-            with open(path,newline='',encoding='utf-8-sig') as f:
-                reader=csv.DictReader(f)
-                self.csv_rows=list(reader); self.csv_headers=list(reader.fieldnames or [])
-            self.csv_path_var.set(path)
-            self.csv_badge.configure(text=f"🗂  {len(self.csv_rows)} rows",
-                fg_color=GRN_DIM,text_color=GRN)
-            self.log(f"✓  CSV — {len(self.csv_rows)} rows")
-            self._update_combos(); self._update_match()
-        except Exception as e: messagebox.showerror("CSV Error",str(e))
-
-    def _update_combos(self):
-        opts=["(skip)"]+self.csv_headers
-        hints={"FILENAME":["filename","file","name","image"],"TITLE":["title"],
-               "KEYWORDS":["keyword","tag","kw"],"DESCRIPTION":["desc","caption","description"]}
-        vmap={"FILENAME":self.col_file_var,"TITLE":self.col_title_var,
-              "KEYWORDS":self.col_kw_var,"DESCRIPTION":self.col_desc_var}
-        for lbl,cb in self.col_combos.items():
-            cb.configure(values=opts)
-            g=next((c for h in hints.get(lbl,[]) for c in self.csv_headers if h in c.lower()),"")
-            vmap[lbl].set(g or "(skip)")
-
-    def browse_embed_folder(self):
-        p=filedialog.askdirectory(title="Select folder")
-        if p: self.folder_path_var.set(p); self._update_match(); self.log(f"✓  Folder — {p}")
-
-    def _update_match(self):
-        folder=self.folder_path_var.get(); col_f=self.col_file_var.get()
-        if not folder or not self.csv_rows or not col_f or col_f=="(skip)": return
-        finder=find_recursive if self.subfolder_var.get() else find_file
-        matched=sum(1 for row in self.csv_rows
-            if finder(folder,(row.get(col_f) or "").strip(),self.match_only_var.get()))
-        total=len(self.csv_rows)
-        color=GRN if matched==total else AMB_BTN if matched>0 else RED_BTN
-        self.folder_badge.configure(text=f"📁  {matched} of {total} matched",
-            fg_color=GRN_DIM,text_color=color)
-
-    def reset_embed(self):
-        if self.embed_running: messagebox.showwarning("Busy","Wait."); return
-        if not messagebox.askyesno("Reset","Clear everything?"): return
-        self.csv_path_var.set(""); self.folder_path_var.set("")
-        for v in [self.col_file_var,self.col_title_var,self.col_kw_var,self.col_desc_var]:
-            v.set("(skip)")
-        self.csv_rows=[]; self.csv_headers=[]
-        self.csv_badge.configure(text="No CSV loaded",fg_color=BG3,text_color=TXT3)
-        self.folder_badge.configure(text="No folder selected",fg_color=BG3,text_color=TXT3)
-        for cb in self.col_combos.values(): cb.configure(values=["(skip)"])
-        self.embed_btn.configure(text="▶  Start Embedding",state="normal")
-        self.clear_log(); self.log("↺  Reset")
-
-    def start_embed(self):
-        if self.embed_running: return
-        et=find_exiftool()
-        if not et: messagebox.showerror("ExifTool not found","Place exiftool.exe next to this app."); return
-        if not self.csv_rows: messagebox.showerror("No CSV","Load a CSV first."); return
-        if not self.folder_path_var.get(): messagebox.showerror("No folder","Select folder."); return
-        fc=self.col_file_var.get()
-        if not fc or fc=="(skip)": messagebox.showerror("Column missing","Select filename column."); return
-        self.embed_running=True
-        self.embed_btn.configure(state="disabled",text="⟳  Processing…")
-        threading.Thread(target=self._embed_thread,args=(et,),daemon=True).start()
-
-    def _embed_thread(self,et):
-        folder=self.folder_path_var.get(); col_f=self.col_file_var.get()
-        col_t=self.col_title_var.get(); col_k=self.col_kw_var.get(); col_d=self.col_desc_var.get()
-        use_sub=self.subfolder_var.get(); use_ext=self.match_only_var.get(); rm_prog=self.rm_prog_var.get()
-        total=len(self.csv_rows); ok=skipped=errors=0
-        finder=find_recursive if use_sub else find_file
-        self.after(0,lambda:self.log(f"▶  Batch — {total} rows"))
-        for i,row in enumerate(self.csv_rows):
-            fn=(row.get(col_f) or "").strip()
-            if not fn: skipped+=1; continue
-            fp=finder(folder,fn,use_ext)
-            if not fp: skipped+=1; self.after(0,lambda f=fn:self.log(f"⚠  Not found: {f}")); continue
-            cmd=[et,'-overwrite_original','-codedcharacterset=UTF8']
-            title=(row.get(col_t) or "").strip() if col_t and col_t!="(skip)" else ""
-            kw_raw=(row.get(col_k) or "").strip() if col_k and col_k!="(skip)" else ""
-            desc=(row.get(col_d) or "").strip() if col_d and col_d!="(skip)" else ""
-            if title: cmd+=[f'-Title={title}',f'-ObjectName={title}',f'-Headline={title}']
-            if kw_raw:
-                for kw in [k.strip() for k in kw_raw.replace(';',',').split(',') if k.strip()]:
-                    cmd+=[f'-Keywords={kw}',f'-Subject={kw}']
-            if desc: cmd+=[f'-Description={desc}',f'-Caption-Abstract={desc}']
-            if rm_prog: cmd+=['-Software=','-CreatorTool=','-HistorySoftwareAgent=']
-            cmd.append(fp)
-            try:
-                flags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0
-                res=subprocess.run(cmd,capture_output=True,text=True,timeout=30,creationflags=flags)
-                actual=os.path.basename(fp)
-                if res.returncode==0: ok+=1; self.after(0,lambda fn=actual:self.log(f"✓  {fn}"))
-                else:
-                    errors+=1; err=(res.stderr or res.stdout or "Unknown").strip()
-                    self.after(0,lambda fn=actual,e=err:self.log(f"✗  {fn} — {e}"))
-            except Exception as ex:
-                errors+=1; self.after(0,lambda fn=fn,e=str(ex):self.log(f"✗  {fn} — {e}"))
-        summary=f"{ok} embedded · {skipped} not found · {errors} errors"
-        self.after(0,lambda:(self.log(f"● Done — {summary}"),
-            self.set_status(f"Done — {summary}",GRN),
-            self.embed_btn.configure(state="normal",text="▶  Start Again"),
-            setattr(self,'embed_running',False)))
-
-    # ── STATUS BAR ─────────────────────────────────────────────────
+    # ── Status bar ─────────────────────────────────────────────────
     def _build_statusbar(self):
         sb=ctk.CTkFrame(self,fg_color=BG2,corner_radius=0,height=40)
-        sb.grid(row=3,column=0,sticky="ew"); sb.grid_propagate(False)
+        sb.grid(row=2,column=0,sticky="ew"); sb.grid_propagate(False)
         sb.grid_columnconfigure(4,weight=1)
         self.p_ok=ctk.CTkLabel(sb,text="✓  0 done",font=ctk.CTkFont("Segoe UI",10,"bold"),
             fg_color=GRN_DIM,text_color=GRN,corner_radius=20,padx=10,pady=3)
