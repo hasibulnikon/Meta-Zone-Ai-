@@ -236,6 +236,27 @@ def find_recursive(folder,name,match_ext):
     except: pass
     return None
 
+def check_online():
+    try:
+        socket.setdefaulttimeout(3)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+        return True
+    except Exception:
+        return False
+
+def make_thumb(path, size=(120,85)):
+    """Build a CTkImage off the main thread. Returns None on failure."""
+    try:
+        ext = os.path.splitext(path)[1].lower()
+        if ext in VECTOR_EXTS or ext in VIDEO_EXTS:
+            return None
+        img = Image.open(path)
+        img = img.convert("RGB")
+        img.thumbnail(size, Image.LANCZOS)
+        return ctk.CTkImage(img, size=img.size)
+    except Exception:
+        return None
+
 # ── AI Engine ──────────────────────────────────────────────────────────
 def img_to_b64(path):
     with open(path,'rb') as f: data=f.read()
@@ -422,12 +443,10 @@ def build_meta_prompt(title_c, desc_c, kw_n, custom_prompt="",
         directives.append(f"Every keyword must be a single word only (no spaces or hyphens).")
     if avoid_copyright:
         directives.append(
-            "CRITICAL: Do NOT include any brand names, company names, trademarked terms, "
-            "copyrighted characters, logos, product names, celebrity names, or any term that "
-            "could constitute copyright or trademark infringement. Use only generic descriptive "
-            "language. If you detect a logo, brand, or copyrighted element in the image, "
-            "describe it generically (e.g. 'logo' not the brand name, 'sports car' not the "
-            "manufacturer, 'cartoon character' not the character's name)."
+            "Do not include any brand names, company names, trademarked terms, copyrighted "
+            "character names, logos, product names, or celebrity names. Use only generic "
+            "descriptive language instead (e.g. 'logo' not the brand name, 'sports car' not "
+            "the manufacturer, 'cartoon character' not the character's name)."
         )
     if custom_prompt.strip():
         directives.append(
@@ -553,6 +572,27 @@ def enforce_single_keywords(kw_string):
 
 # Common brand/trademark fragments to filter from keywords when avoid_copyright is on.
 # This is a post-processing safety net — the main enforcement is in the prompt itself.
+_COPYRIGHT_KW_BLOCKLIST = {
+    "nike","adidas","puma","reebok","apple","iphone","android","samsung","sony","disney",
+    "marvel","pixar","dc comics","warner bros","netflix","coca-cola","coke","pepsi",
+    "mcdonalds","starbucks","google","microsoft","windows","facebook","instagram","twitter",
+    "tesla","bmw","mercedes","audi","toyota","honda","ford","chevrolet","ferrari","lamborghini",
+    "louis vuitton","gucci","chanel","prada","rolex","batman","superman","spiderman",
+    "mickey mouse","hello kitty","pokemon","mario","minecraft","playstation","xbox","nintendo",
+}
+
+def _strip_copyright_keywords(kw_string):
+    """Drop any keyword that matches (or contains) a known brand/trademark fragment."""
+    if not kw_string:
+        return kw_string
+    raw = [k.strip() for k in kw_string.split(",") if k.strip()]
+    kept = []
+    for kw in raw:
+        low = kw.lower()
+        if any(term in low for term in _COPYRIGHT_KW_BLOCKLIST):
+            continue
+        kept.append(kw)
+    return ", ".join(kept)
 
 # ══════════════════════════════════════════════════════════════════════
 #  PALETTE — Black Glassmorphic
@@ -663,9 +703,10 @@ class APIManagerWindow(ctk.CTkToplevel):
             text_color=TXT2,fg_color=BG2).pack(anchor="w",padx=18,pady=(0,4))
         mv=StringVar(value=model_label(p,cur_id))
         ctk.CTkComboBox(inner,variable=mv,values=[m[0] for m in models],state="readonly",
-            font=ctk.CTkFont("Segoe UI",12),fg_color=BG3,text_color=TXT,border_color=GLASS_BDR,
-            button_color=GRN,button_hover_color=GRN_H,dropdown_fg_color=BG3,
-            dropdown_text_color=TXT,dropdown_hover_color=BG4,corner_radius=8,height=40,
+            font=ctk.CTkFont("Segoe UI",12),fg_color=BG3,text_color=TXT,border_color=GRN_DIM,
+            border_width=2,button_color=GRN,button_hover_color=GRN_H,dropdown_fg_color=BG4,
+            dropdown_text_color=TXT,dropdown_hover_color=GRN_DIM,
+            dropdown_font=ctk.CTkFont("Segoe UI",12),corner_radius=8,height=40,
             command=lambda v:self._save_model(p,v)).pack(fill="x",padx=18,pady=(0,16))
         ctk.CTkFrame(inner,fg_color=GLASS_BDR,height=1,corner_radius=0).pack(fill="x")
         ctk.CTkLabel(inner,text="Add New API Key",font=ctk.CTkFont("Segoe UI",12),
@@ -788,19 +829,29 @@ class APIManagerWindow(ctk.CTkToplevel):
 #  EMBED WINDOW (compact popup)
 # ══════════════════════════════════════════════════════════════════════
 class EmbedWindow(ctk.CTkToplevel):
-    def __init__(self,parent,csv_path=None):
+    def __init__(self,parent,csv_path=None,folder_path=None):
         super().__init__(parent); self.title("Embed Metadata")
         self.configure(fg_color=BG1); self.resizable(True,True)
         self.grab_set()
         self.csv_rows=[]; self.csv_headers=[]; self.embed_running=False
+        self.col_combos={}  # set for real inside _build(); defensive default so
+                             # a partial/failed build can never raise the
+                             # "no attribute 'col_combos'" error on later use
         self.csv_path_var=StringVar(); self.folder_path_var=StringVar()
         self.col_file_var=StringVar(value="(skip)"); self.col_title_var=StringVar(value="(skip)")
         self.col_kw_var=StringVar(value="(skip)"); self.col_desc_var=StringVar(value="(skip)")
         self.match_only_var=BooleanVar(value=True); self.subfolder_var=BooleanVar(value=True)
         self.rm_prog_var=BooleanVar(value=True); self.rm_copy_var=BooleanVar(value=True)
         self._build()
-        self._center(680,560)
+        # Match the API Manager window's size, as requested
+        self._center(920,620)
         self.protocol("WM_DELETE_WINDOW",self.destroy)
+        # Auto-load whatever was just generated, so "generate then embed" is
+        # a one-click flow instead of re-browsing for the CSV and folder.
+        if folder_path:
+            self.folder_path_var.set(folder_path)
+            self.folder_status.configure(text=f"✓ {os.path.basename(folder_path)}",
+                fg_color=GRN_DIM,text_color=GRN)
         if csv_path: self._do_load_csv(csv_path)
 
     def _center(self,w,h):
@@ -857,8 +908,9 @@ class EmbedWindow(ctk.CTkToplevel):
                 text_color=TXT3,fg_color="transparent").pack(anchor="w")
             cb=ctk.CTkComboBox(cell,variable=var,values=["(skip)"],state="readonly",
                 font=ctk.CTkFont("Segoe UI",11),fg_color=BG3,text_color=TXT,
-                border_color=GLASS_BDR,button_color=GRN,button_hover_color=GRN_H,
-                dropdown_fg_color=BG3,dropdown_text_color=TXT,dropdown_hover_color=BG4,
+                border_color=GRN_DIM,border_width=2,button_color=GRN,button_hover_color=GRN_H,
+                dropdown_fg_color=BG4,dropdown_text_color=TXT,dropdown_hover_color=GRN_DIM,
+                dropdown_font=ctk.CTkFont("Segoe UI",11),
                 corner_radius=8,height=34,command=lambda v:None)
             cb.pack(fill="x",pady=(2,0)); self.col_combos[lbl]=cb
 
@@ -1015,16 +1067,58 @@ class EmbedWindow(ctk.CTkToplevel):
             setattr(self,'embed_running',False)))
 
 
+class ImportProgressDialog(ctk.CTkToplevel):
+    def __init__(self,parent,total):
+        super().__init__(parent)
+        self.title("Importing Images")
+        self.configure(fg_color=BG2); self.resizable(False,False)
+        self.grab_set(); self.protocol("WM_DELETE_WINDOW",lambda:None)
+        self.grid_columnconfigure(0,weight=1)
+        ctk.CTkLabel(self,text="⟳  Importing Images…",font=ctk.CTkFont("Segoe UI",14,"bold"),
+            text_color=TXT,fg_color=BG2).grid(row=0,column=0,padx=24,pady=(20,8))
+        self._lbl=ctk.CTkLabel(self,text=f"0 / {total} files",font=ctk.CTkFont("Segoe UI",11),
+            text_color=TXT2,fg_color=BG2)
+        self._lbl.grid(row=1,column=0,padx=24,pady=(0,10))
+        self._bar=ctk.CTkProgressBar(self,progress_color=GRN,fg_color=BG3,
+            height=10,corner_radius=5,width=320)
+        self._bar.grid(row=2,column=0,padx=24,pady=(0,20)); self._bar.set(0)
+        self.update_idletasks()
+        w,h=380,130
+        x=parent.winfo_x()+(parent.winfo_width()-w)//2
+        y=parent.winfo_y()+(parent.winfo_height()-h)//2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def update_progress(self,done,total):
+        self._lbl.configure(text=f"{done} / {total} files")
+        self._bar.set(done/total if total else 0)
+
+    def finish(self):
+        try: self.grab_release()
+        except Exception: pass
+        self.destroy()
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  RESULT CARD
 # ══════════════════════════════════════════════════════════════════════
 class MetaResultCard(ctk.CTkFrame):
-    def __init__(self,master,path,result,on_redo,mode="meta",**kw):
+    STATUS_STYLE = {
+        "waiting": ("○  Waiting",  TXT3, BG4),
+        "working": ("⟳  Working…", AMB_BTN, AMB_DIM),
+        "done":    ("✓  Done",     GRN, GRN_DIM),
+        "failed":  ("✗  Failed",   RED_BTN, RED_DIM),
+    }
+
+    def __init__(self,master,path,result,on_redo,mode="meta",request_thumb=None,**kw):
         super().__init__(master,fg_color=GLASS,corner_radius=10,
             border_width=1,border_color=GLASS_BDR,**kw)
         self.path=path; self.result=dict(result); self.mode=mode
-        self._boxes={}
+        self._boxes={}; self._hdr_lbls={}
         self._build(on_redo)
+        if request_thumb:
+            request_thumb(self.path,self._tlbl)
+        else:
+            threading.Thread(target=self._load_thumb,daemon=True).start()
 
     def _build(self,on_redo):
         self.grid_columnconfigure(0,weight=1)
@@ -1039,41 +1133,46 @@ class MetaResultCard(ctk.CTkFrame):
         self._tlbl=ctk.CTkLabel(tf,text="🖼",font=ctk.CTkFont("Segoe UI",16),
             fg_color=BG3,text_color=TXT3,width=54,height=54,corner_radius=6)
         self._tlbl.pack()
-        threading.Thread(target=self._load_thumb,daemon=True).start()
 
         fname=os.path.basename(self.path)
         ctk.CTkLabel(top,text=fname[:36]+"…" if len(fname)>36 else fname,
-            font=ctk.CTkFont("Segoe UI",10,"bold"),text_color=TXT2,
+            font=ctk.CTkFont("Segoe UI",10),text_color=TXT2,
             fg_color="transparent",anchor="w"
         ).grid(row=0,column=1,sticky="w")
 
-        model_used=self.result.get("model_used","")
-        if model_used:
-            ctk.CTkLabel(top,text=model_used,font=ctk.CTkFont("Segoe UI",8),
-                text_color=TXT3,fg_color=BG4,corner_radius=20,padx=6,pady=2
-            ).grid(row=1,column=1,sticky="w")
+        botrow=ctk.CTkFrame(top,fg_color="transparent",corner_radius=0)
+        botrow.grid(row=1,column=1,sticky="w")
+        self._status_lbl=ctk.CTkLabel(botrow,text="",font=ctk.CTkFont("Segoe UI",8,"bold"),
+            text_color=TXT3,fg_color=BG4,corner_radius=20,padx=6,pady=2)
+        self._status_lbl.pack(side="left")
+        self._model_lbl=ctk.CTkLabel(botrow,text="",font=ctk.CTkFont("Segoe UI",8),
+            text_color=TXT3,fg_color="transparent",padx=4)
+        self._model_lbl.pack(side="left")
 
-        # Redo button top-right
-        ctk.CTkButton(top,text="↺",width=28,height=28,
-            font=ctk.CTkFont("Segoe UI",12,"bold"),
+        # Redo button top-right (kept larger — same size for both meta and prompt cards)
+        self._redo_btn=ctk.CTkButton(top,text="↺",width=40,height=40,
+            font=ctk.CTkFont("Segoe UI",16,"bold"),
             fg_color=BG4,hover_color=AMB_DIM,text_color=AMB_BTN,
-            corner_radius=8,command=on_redo
-        ).grid(row=0,column=2,rowspan=2,padx=(4,0))
+            corner_radius=10,command=on_redo)
+        self._redo_btn.grid(row=0,column=2,rowspan=2,padx=(4,0))
 
         if self.mode=="prompt":
             self._build_prompt_fields()
         else:
             self._build_meta_fields()
 
+        self._refresh_status()
+
     def _build_prompt_fields(self):
         prompt_val=self.result.get("prompt","")
-        wcount=len(prompt_val.split()) if prompt_val else 0
         hdr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
         hdr.grid(row=1,column=0,sticky="ew",padx=8,pady=(0,2))
         hdr.grid_columnconfigure(1,weight=1)
-        ctk.CTkLabel(hdr,text=f"Prompt  ({wcount} words)",
+        lbl=ctk.CTkLabel(hdr,text="Prompt  (0 words)",
             font=ctk.CTkFont("Segoe UI",9,"bold"),text_color=TXT3,
-            fg_color="transparent").grid(row=0,column=0,sticky="w")
+            fg_color="transparent")
+        lbl.grid(row=0,column=0,sticky="w")
+        self._hdr_lbls["prompt"]=("Prompt",lbl,False)
         bf=ctk.CTkFrame(hdr,fg_color="transparent",corner_radius=0)
         bf.grid(row=0,column=2,sticky="e")
         ctk.CTkButton(bf,text="⧉",width=28,height=20,font=ctk.CTkFont("Segoe UI",9),
@@ -1088,27 +1187,27 @@ class MetaResultCard(ctk.CTkFrame):
         box.grid(row=2,column=0,sticky="ew",padx=8,pady=(0,8))
         if prompt_val: box.insert("1.0",prompt_val)
         self._boxes["prompt"]=box
+        self._recount("prompt")
         def _upd(e=None):
             self.result["prompt"]=box.get("1.0","end-1c")
+            self._recount("prompt")
         box.bind("<KeyRelease>",_upd)
 
     def _build_meta_fields(self):
         title=self.result.get("title","")
         desc=self.result.get("desc","")
         kw=self.result.get("kw","")
-        kw_count=len([x for x in kw.split(",") if x.strip()]) if kw else 0
 
-        fields=[
-            ("title",  f"Title  ({len(title)} chars)",  title, CYAN,  36),
-            ("desc",   f"Desc  ({len(desc)} chars)",    desc,  TXT2,  44),
-            ("kw",     f"Keywords  ({kw_count})",        kw,    GRN,   52),
-        ]
+        fields=[("title","Title",title,CYAN,36),("desc","Desc",desc,TXT2,44),
+                ("kw","Keywords",kw,GRN,52)]
         for r,(key,label,val,color,h) in enumerate(fields,1):
             hdr=ctk.CTkFrame(self,fg_color="transparent",corner_radius=0)
             hdr.grid(row=r*2-1,column=0,sticky="ew",padx=8,pady=(4 if r==1 else 2,0))
             hdr.grid_columnconfigure(1,weight=1)
-            ctk.CTkLabel(hdr,text=label,font=ctk.CTkFont("Segoe UI",9,"bold"),
-                text_color=TXT3,fg_color="transparent").grid(row=0,column=0,sticky="w")
+            lbl=ctk.CTkLabel(hdr,text=label,font=ctk.CTkFont("Segoe UI",9,"bold"),
+                text_color=TXT3,fg_color="transparent")
+            lbl.grid(row=0,column=0,sticky="w")
+            self._hdr_lbls[key]=(label,lbl,key=="kw")
             bf=ctk.CTkFrame(hdr,fg_color="transparent",corner_radius=0)
             bf.grid(row=0,column=2,sticky="e")
             ctk.CTkButton(bf,text="⧉",width=28,height=20,font=ctk.CTkFont("Segoe UI",9),
@@ -1123,13 +1222,69 @@ class MetaResultCard(ctk.CTkFrame):
             box.grid(row=r*2,column=0,sticky="ew",padx=8,pady=(1,0))
             if val: box.insert("1.0",val)
             self._boxes[key]=box
+            self._recount(key)
             def _upd(e=None,k=key,b=box):
                 self.result[k]=b.get("1.0","end-1c")
+                self._recount(k)
             box.bind("<KeyRelease>",_upd)
 
         # bottom padding
         ctk.CTkFrame(self,fg_color="transparent",height=6,corner_radius=0).grid(
             row=8,column=0)
+
+    def _recount(self,key):
+        if key not in self._hdr_lbls or key not in self._boxes: return
+        base,lbl,is_kw=self._hdr_lbls[key]
+        val=self._boxes[key].get("1.0","end-1c")
+        if is_kw:
+            n=len([x for x in val.split(",") if x.strip()])
+            lbl.configure(text=f"{base}  ({n})")
+        elif key=="prompt":
+            n=len(val.split()) if val.strip() else 0
+            lbl.configure(text=f"{base}  ({n} words)")
+        else:
+            lbl.configure(text=f"{base}  ({len(val)} chars)")
+
+    def _refresh_status(self):
+        status=self.result.get("status","waiting")
+        text,fg,bg=self.STATUS_STYLE.get(status,self.STATUS_STYLE["waiting"])
+        self._status_lbl.configure(text=text,text_color=fg,fg_color=bg)
+        err=self.result.get("error","")
+        model_used=self.result.get("model_used","")
+        if status=="failed" and err:
+            self._model_lbl.configure(text=f"⚠ {err[:60]}",text_color=RED_BTN)
+        else:
+            self._model_lbl.configure(text=model_used,text_color=TXT3)
+        self.configure(border_color=GLASS_BDR if status!="failed" else RED_BTN)
+
+    def apply_result(self,result):
+        """Update this card IN PLACE with a new result dict — used instead of
+        destroying/recreating cards on every generation, redo, or retry."""
+        self.result=dict(result)
+        if self.mode=="prompt":
+            box=self._boxes.get("prompt")
+            if box:
+                box.delete("1.0","end")
+                val=self.result.get("prompt","")
+                if val: box.insert("1.0",val)
+                self._recount("prompt")
+        else:
+            for key in ("title","desc","kw"):
+                box=self._boxes.get(key)
+                if box:
+                    box.delete("1.0","end")
+                    val=self.result.get(key,"")
+                    if val: box.insert("1.0",val)
+                    self._recount(key)
+        self._refresh_status()
+
+    def set_waiting(self):
+        self.result={"status":"waiting"}
+        self._refresh_status()
+
+    def set_working(self):
+        self.result={"status":"working"}
+        self._refresh_status()
 
     def _copy(self,key):
         val=self._boxes[key].get("1.0","end-1c") if key in self._boxes else self.result.get(key,"")
@@ -1181,6 +1336,8 @@ class App(DnDCTk):
 
         self._all_paths=[]; self._results={}
         self._thumb_queue=queue.Queue()
+        self._thumb_job_queue=queue.Queue()
+        self._card_by_path={}
         self.ai_running=False; self.ai_stop_flag=False
         self._ai_paused=False; self.current_mode="meta"
         self._result_cards=[]; self._source_folder=""
@@ -1193,7 +1350,7 @@ class App(DnDCTk):
         self.ai_custom_var   =StringVar(value=self.prefs.get("custom_prompt",""))
         self.ai_single_kw_var=BooleanVar(value=self.prefs.get("single_keywords",False))
         self.ai_avoid_copy_var=BooleanVar(value=self.prefs.get("avoid_copyright",False))
-        self.ai_concurrency_var=IntVar(value=self.prefs.get("concurrency",1))
+        self.ai_concurrency_var=IntVar(value=self.prefs.get("concurrency",3))
         self.ai_platform_var =StringVar(value=self.prefs.get("platform","Adobe Stock"))
         self.ai_prefix_on_var=BooleanVar(value=False)
         self.ai_suffix_on_var=BooleanVar(value=False)
@@ -1209,6 +1366,23 @@ class App(DnDCTk):
         self.after(200,self._check_et)
         self.after(500,self._online_loop)
         self.after(80,self._poll_thumb_queue)
+        self._start_thumb_workers()
+
+    def _start_thumb_workers(self,n=4):
+        def worker():
+            while True:
+                path,size,widget=self._thumb_job_queue.get()
+                img=make_thumb(path,size)
+                if img is not None:
+                    self._thumb_queue.put((widget,img))
+        for _ in range(n):
+            threading.Thread(target=worker,daemon=True).start()
+
+    def _request_thumb(self,path,widget,size=(52,52)):
+        """Queue a thumbnail decode job for the bounded worker pool instead
+        of spawning a fresh OS thread per image — this is what previously
+        caused thread-storm freezes/races when importing many images."""
+        self._thumb_job_queue.put((path,size,widget))
 
     def _center(self,w,h):
         self.update_idletasks()
@@ -1374,36 +1548,29 @@ class App(DnDCTk):
         self._plat_combo=ctk.CTkComboBox(msf,variable=self.ai_platform_var,
             values=list(PLATFORM_RULES.keys()),state="readonly",
             font=ctk.CTkFont("Segoe UI",11,"bold"),
-            fg_color=BG3,text_color=GRN,border_color=GRN_DIM,
+            fg_color=BG3,text_color=GRN,border_color=GRN_DIM,border_width=2,
             button_color=GRN,button_hover_color=GRN_H,
-            dropdown_fg_color=BG3,dropdown_text_color=TXT,dropdown_hover_color=BG4,
+            dropdown_fg_color=BG4,dropdown_text_color=TXT,dropdown_hover_color=GRN_DIM,
+            dropdown_font=ctk.CTkFont("Segoe UI",11),
             corner_radius=8,height=36,command=self._on_platform_change)
         self._plat_combo.pack(fill="x",padx=10,pady=(0,8))
+        self._plat_combo.bind("<MouseWheel>",self._on_platform_scroll)
+        self._plat_combo.bind("<Button-4>",lambda e:self._on_platform_scroll(e,-1))
+        self._plat_combo.bind("<Button-5>",lambda e:self._on_platform_scroll(e,1))
 
         self._title_sl=self._slider(msf,"Title Length",self.ai_title_var,10,200,int(self.ai_title_var.get()))
         self._desc_sl =self._slider(msf,"Description Length",self.ai_desc_var,20,500,int(self.ai_desc_var.get()))
         self._kw_sl   =self._slider(msf,"Keywords Count",self.ai_kw_var,5,49,int(self.ai_kw_var.get()))
 
-        # Single keyword + Avoid copyright
-        for label,var in [("Single Word Keywords",self.ai_single_kw_var),
-                           ("🚫  Avoid Copyright",self.ai_avoid_copy_var)]:
-            rf=ctk.CTkFrame(msf,fg_color=BG3 if "Copyright" in label else BG2,
-                corner_radius=8 if "Copyright" in label else 0,
-                border_width=1 if "Copyright" in label else 0,
-                border_color=GLASS_BDR)
-            rf.pack(fill="x",padx=10,pady=(1,4 if "Copyright" in label else 1))
-            rf.grid_columnconfigure(0,weight=1)
-            ctk.CTkLabel(rf,text=label,font=ctk.CTkFont("Segoe UI",11),
-                text_color=TXT2,fg_color="transparent",
-                padx=8 if "Copyright" in label else 0,
-                pady=4 if "Copyright" in label else 0
-            ).grid(row=0,column=0,sticky="w",padx=(8 if "Copyright" in label else 0,0),
-                   pady=(6 if "Copyright" in label else 0,6 if "Copyright" in label else 0))
-            ctk.CTkSwitch(rf,text="",variable=var,
-                progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
-                onvalue=True,offvalue=False,width=46,height=24,command=self._save_settings
-            ).grid(row=0,column=1,sticky="e",padx=(0,8 if "Copyright" in label else 0),
-                   pady=(6 if "Copyright" in label else 0,6 if "Copyright" in label else 0))
+        # Single keyword toggle (Avoid Copyright now lives inside Advanced Options)
+        rf=ctk.CTkFrame(msf,fg_color=BG2,corner_radius=0)
+        rf.pack(fill="x",padx=10,pady=(1,1)); rf.grid_columnconfigure(0,weight=1)
+        ctk.CTkLabel(rf,text="Single Word Keywords",font=ctk.CTkFont("Segoe UI",11),
+            text_color=TXT2,fg_color="transparent").grid(row=0,column=0,sticky="w")
+        ctk.CTkSwitch(rf,text="",variable=self.ai_single_kw_var,
+            progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
+            onvalue=True,offvalue=False,width=46,height=24,command=self._save_settings
+        ).grid(row=0,column=1,sticky="e")
 
         # Anchor for stable mode switch
         self._sl_anchor=ctk.CTkFrame(inner,fg_color=BG2,height=0,corner_radius=0)
@@ -1415,7 +1582,22 @@ class App(DnDCTk):
         self._words_sl=self._slider(self._prompt_sf,"Max Prompt Words",
             self.ai_words_var,10,200,int(self.ai_words_var.get()))
 
-        # Advanced options (collapsible)
+        # Custom system prompt — always visible, sits above Advanced Options
+        self._div(inner)
+        ctk.CTkLabel(inner,text="CUSTOM SYSTEM PROMPT",font=ctk.CTkFont("Segoe UI",9,"bold"),
+            text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(4,2))
+        self._custom_box=ctk.CTkTextbox(inner,height=68,
+            font=ctk.CTkFont("Segoe UI",11),fg_color=BG3,text_color=TXT,
+            border_color=GLASS_BDR,border_width=1,corner_radius=8,wrap="word")
+        self._custom_box.pack(fill="x",padx=10,pady=(0,4))
+        if self.ai_custom_var.get(): self._custom_box.insert("1.0",self.ai_custom_var.get())
+        self._custom_box.bind("<KeyRelease>",lambda e:self._save_custom())
+        ctk.CTkButton(inner,text="↺  Reset to Default",height=28,
+            font=ctk.CTkFont("Segoe UI",11),fg_color="transparent",
+            hover_color=BG3,text_color=CYAN,corner_radius=6,anchor="w",
+            command=self._reset_defaults).pack(anchor="w",padx=10,pady=(0,10))
+
+        # Advanced options (collapsible) — last section
         self._div(inner)
         self._adv_visible=False
         self._adv_body=ctk.CTkFrame(inner,fg_color=BG2,corner_radius=0)
@@ -1432,11 +1614,11 @@ class App(DnDCTk):
         ctk.CTkLabel(ab,text="CONTENT THEMES",font=ctk.CTkFont("Segoe UI",9,"bold"),
             text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(8,2))
         for s in ["Silhouette","White Background","Transparent","Vector","Videos"]:
-            rf=ctk.CTkFrame(ab,fg_color=BG2,corner_radius=0)
-            rf.pack(fill="x",padx=10,pady=1); rf.grid_columnconfigure(0,weight=1)
-            ctk.CTkLabel(rf,text=s,font=ctk.CTkFont("Segoe UI",11),
+            rf2=ctk.CTkFrame(ab,fg_color=BG2,corner_radius=0)
+            rf2.pack(fill="x",padx=10,pady=1); rf2.grid_columnconfigure(0,weight=1)
+            ctk.CTkLabel(rf2,text=s,font=ctk.CTkFont("Segoe UI",11),
                 text_color=TXT2,fg_color=BG2).grid(row=0,column=0,sticky="w")
-            ctk.CTkSwitch(rf,text="",variable=self._style_vars[s],
+            ctk.CTkSwitch(rf2,text="",variable=self._style_vars[s],
                 progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
                 onvalue=True,offvalue=False,width=46,height=24
             ).grid(row=0,column=1,sticky="e")
@@ -1468,19 +1650,16 @@ class App(DnDCTk):
 
         ctk.CTkFrame(ab,fg_color=GLASS_BDR,height=1,corner_radius=0).pack(fill="x",padx=8,pady=6)
 
-        # Custom system prompt
-        ctk.CTkLabel(ab,text="CUSTOM SYSTEM PROMPT",font=ctk.CTkFont("Segoe UI",9,"bold"),
-            text_color=TXT3,fg_color=BG2).pack(anchor="w",padx=12,pady=(4,2))
-        self._custom_box=ctk.CTkTextbox(ab,height=68,
-            font=ctk.CTkFont("Segoe UI",11),fg_color=BG3,text_color=TXT,
-            border_color=GLASS_BDR,border_width=1,corner_radius=8,wrap="word")
-        self._custom_box.pack(fill="x",padx=10,pady=(0,4))
-        if self.ai_custom_var.get(): self._custom_box.insert("1.0",self.ai_custom_var.get())
-        self._custom_box.bind("<KeyRelease>",lambda e:self._save_custom())
-        ctk.CTkButton(ab,text="↺  Reset to Default",height=28,
-            font=ctk.CTkFont("Segoe UI",11),fg_color="transparent",
-            hover_color=BG3,text_color=CYAN,corner_radius=6,anchor="w",
-            command=self._reset_defaults).pack(anchor="w",padx=10,pady=(0,10))
+        # Avoid Copyright — moved inside Advanced Options
+        rf3=ctk.CTkFrame(ab,fg_color=BG3,corner_radius=8,border_width=1,border_color=GLASS_BDR)
+        rf3.pack(fill="x",padx=10,pady=(0,10)); rf3.grid_columnconfigure(0,weight=1)
+        ctk.CTkLabel(rf3,text="🚫  Avoid Copyright",font=ctk.CTkFont("Segoe UI",11),
+            text_color=TXT2,fg_color="transparent",padx=8,pady=4
+        ).grid(row=0,column=0,sticky="w",padx=(8,0),pady=(6,6))
+        ctk.CTkSwitch(rf3,text="",variable=self.ai_avoid_copy_var,
+            progress_color=GRN,button_color=TXT,fg_color=GLASS_BDR,
+            onvalue=True,offvalue=False,width=46,height=24,command=self._save_settings
+        ).grid(row=0,column=1,sticky="e",padx=(0,8),pady=(6,6))
 
     def _toggle_advanced(self):
         self._adv_visible=not self._adv_visible
@@ -1504,6 +1683,20 @@ class App(DnDCTk):
             self._meta_sf.pack_forget()
             self._prompt_sf.pack(fill="x",before=self._sl_anchor)
         self._clear_results()
+        for p in self._all_paths:
+            self._results[p]={"status":"waiting"}
+            self._make_blank_card(p)
+
+    def _on_platform_scroll(self,event,direction=None):
+        plats=list(PLATFORM_RULES.keys())
+        cur=self.ai_platform_var.get()
+        idx=plats.index(cur) if cur in plats else 0
+        d=direction if direction is not None else (-1 if getattr(event,"delta",0)>0 else 1)
+        idx=(idx+d)%len(plats)
+        new_val=plats[idx]
+        self._plat_combo.set(new_val)
+        self._on_platform_change(new_val)
+        return "break"
 
     def _on_platform_change(self,val):
         rules=PLATFORM_RULES.get(val,{})
@@ -1643,46 +1836,25 @@ class App(DnDCTk):
             command=self._open_embed)
         self._embed_btn.pack(side="left")
 
-        # UPLOAD ZONE — taller (2 rows of thumbs = 200px)
+        # UPLOAD BAR — slim text-only strip (thumbnails now live inside each
+        # card, so this no longer needs to reserve grid space for them). The
+        # WHOLE WINDOW is a drop zone too — see _register_drop_targets below.
         ws=ctk.CTkFrame(main,fg_color=GLASS,corner_radius=12,
-            border_width=1,border_color=GLASS_BDR)
+            border_width=1,border_color=GLASS_BDR,height=64)
         ws.grid(row=1,column=0,sticky="ew",padx=8,pady=(6,4))
-        ws.grid_columnconfigure(0,weight=1)
+        ws.grid_columnconfigure(0,weight=1); ws.grid_propagate(False)
+        self._ws_frame=ws
 
-        self._thumb_scroll=ctk.CTkScrollableFrame(ws,
-            fg_color=BG3,corner_radius=8,orientation="horizontal",
-            scrollbar_button_color=BG4,scrollbar_button_hover_color=GLASS_BDR,
-            height=200)
-        self._thumb_scroll.grid(row=0,column=0,sticky="ew",padx=8,pady=8)
-        self._thumb_grid=self._thumb_scroll
+        self._ws_empty=ctk.CTkLabel(ws,
+            text="🖼️  Drag & drop images/video anywhere in this window — or click here to browse\nJPG · PNG · GIF · WEBP · TIFF · SVG · EPS · MP4 · MOV",
+            font=ctk.CTkFont("Segoe UI",12),
+            text_color=TXT2,fg_color=GLASS,justify="center",anchor="center")
+        self._ws_empty.place(relx=0.5,rely=0.5,anchor="center")
 
-        self._ws_empty=ctk.CTkLabel(self._thumb_scroll,
-            text="BROWSE\n\n🖼️   🎬   ✦\n\nDrag & drop files here or click to browse\nJPG · PNG · GIF · WEBP · TIFF · SVG · EPS · MP4 · MOV",
-            font=ctk.CTkFont("Segoe UI",14,"bold"),
-            text_color=TXT2,fg_color=BG3,justify="center",anchor="center")
-        self._ws_empty.pack(expand=True,fill="both")
-
-        for w in (ws,self._thumb_scroll,self._ws_empty):
+        for w in (ws,self._ws_empty):
             w.bind("<Button-1>",lambda e:self._browse_images())
-        try:
-            self._thumb_scroll._parent_canvas.bind("<Button-1>",lambda e:self._browse_images())
-        except: pass
 
-        if DND_AVAILABLE:
-            for w in (self._thumb_scroll,self._ws_empty,ws):
-                try:
-                    w.drop_target_register(DND_FILES)
-                    w.dnd_bind("<<DropEnter>>",self._on_drag_enter)
-                    w.dnd_bind("<<DropLeave>>",self._on_drag_leave)
-                    w.dnd_bind("<<Drop>>",self._on_drop)
-                except: pass
-            try:
-                cv=self._thumb_scroll._parent_canvas
-                cv.drop_target_register(DND_FILES)
-                cv.dnd_bind("<<DropEnter>>",self._on_drag_enter)
-                cv.dnd_bind("<<DropLeave>>",self._on_drag_leave)
-                cv.dnd_bind("<<Drop>>",self._on_drop)
-            except: pass
+        self._register_drop_targets([ws,self._ws_empty])
 
         # Progress bar
         prog=ctk.CTkFrame(main,fg_color=BG1,corner_radius=0,height=28)
@@ -1721,19 +1893,41 @@ class App(DnDCTk):
             font=ctk.CTkFont("Segoe UI",12),text_color=TXT3,fg_color="transparent")
         self._gen_empty_lbl.grid(row=0,column=0,columnspan=2,pady=40)
 
+        # Cover the rest of the window so dropping anywhere (not just the
+        # upload bar) works — tkdnd only fires on widgets that registered.
+        self._register_drop_targets([main,topbar,gen,gen_hdr,self._gen_scroll,
+                                      self._gen_empty_lbl,self._sb])
+
     def _open_embed(self):
-        # Pass the last generated CSV path if available
-        EmbedWindow(self, csv_path=getattr(self,"_last_csv_path",None))
+        # Pass the last generated CSV path (and the image folder just used)
+        # if available — this is exactly what makes "generate then embed"
+        # a one-click flow instead of re-browsing for everything.
+        EmbedWindow(self, csv_path=getattr(self,"_last_csv_path",None),
+                    folder_path=self._source_folder or None)
 
     # ── DnD ────────────────────────────────────────────────────────
+    def _register_drop_targets(self,widgets):
+        """Register every widget passed in (plus the whole window) as a
+        drag-and-drop target, so dropping files ANYWHERE in the app works —
+        not just inside the small upload bar."""
+        if not DND_AVAILABLE: return
+        for w in list(widgets)+[self]:
+            try:
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind("<<DropEnter>>",self._on_drag_enter)
+                w.dnd_bind("<<DropLeave>>",self._on_drag_leave)
+                w.dnd_bind("<<Drop>>",self._on_drop)
+            except Exception:
+                pass
+
     def _on_drag_enter(self,event):
-        self._thumb_scroll.configure(fg_color=GRN_DIM)
+        self._ws_frame.configure(border_color=GRN,fg_color=GRN_DIM)
         self._ws_empty.configure(fg_color=GRN_DIM,text_color=GRN)
         return event.action
 
     def _on_drag_leave(self,event):
-        self._thumb_scroll.configure(fg_color=BG3)
-        self._ws_empty.configure(fg_color=BG3,text_color=TXT2)
+        self._ws_frame.configure(border_color=GLASS_BDR,fg_color=GLASS)
+        self._ws_empty.configure(fg_color=GLASS,text_color=TXT2)
         return event.action
 
     def _on_drop(self,event):
@@ -1765,41 +1959,53 @@ class App(DnDCTk):
              and os.path.splitext(p)[1].lower() in ALL_SUPPORTED_EXTS]
         if not new: return
         if not self._source_folder: self._source_folder=os.path.dirname(new[0])
-        for p in new:
-            self._all_paths.append(p); self._results[p]={"status":"waiting"}
-        self._rebuild_thumb_grid()
-        self._gen_btn.configure(text=f"✨  Generate ({len(self._all_paths)})")
-        self._update_progress()
+        if len(new)>15:
+            self._import_with_progress(new)
+        else:
+            for p in new: self._make_blank_card(p)
+            self._gen_btn.configure(text=f"✨  Generate ({len(self._all_paths)})")
+            self._update_progress()
 
-    def _rebuild_thumb_grid(self):
-        for w in self._thumb_grid.winfo_children():
-            if w is not self._ws_empty:
-                try: w.destroy()
-                except: pass
-        total=len(self._all_paths)
-        if total==0:
-            self._ws_empty.pack(expand=True,fill="both"); return
-        self._ws_empty.pack_forget()
-        CELL=96  # 2 rows fit in 200px height
-        for i,path in enumerate(self._all_paths):
-            cell=ctk.CTkFrame(self._thumb_grid,fg_color=BG4,corner_radius=4,width=CELL,height=CELL)
-            cell.pack(side="left",padx=(0,2))
-            cell.pack_propagate(False)
-            lbl=ctk.CTkLabel(cell,text="⟳",font=ctk.CTkFont("Segoe UI",11),
-                fg_color=BG4,text_color=TXT3,width=CELL,height=CELL,corner_radius=4)
-            lbl.place(relx=0.5,rely=0.5,anchor="center")
-            st=self._results.get(path,{}).get("status","waiting")
-            if st in ("done","failed"):
-                dot=ctk.CTkLabel(cell,text="✓" if st=="done" else "✗",
-                    font=ctk.CTkFont("Segoe UI",8,"bold"),
-                    fg_color=GRN_DIM if st=="done" else RED_DIM,
-                    text_color=GRN if st=="done" else RED_BTN,
-                    corner_radius=8,width=14,height=14)
-                dot.place(relx=1.0,rely=0.0,anchor="ne",x=-2,y=2)
-            def _load(p=path,l=lbl):
-                img=make_thumb(p,(CELL-4,CELL-4))
-                if img: self._thumb_queue.put((l,img))
-            threading.Thread(target=_load,daemon=True).start()
+    def _import_with_progress(self,paths):
+        """Create blank cards in small UI batches (so the event loop is
+        never blocked for more than a few widgets at a time), with a visible
+        progress dialog — thumbnails are decoded separately by the bounded
+        worker pool, never on the main thread."""
+        dlg=ImportProgressDialog(self,len(paths))
+        total=len(paths); state={"i":0}
+
+        def add_batch():
+            BATCH=8
+            end=min(state["i"]+BATCH,total)
+            for idx in range(state["i"],end):
+                self._make_blank_card(paths[idx])
+            state["i"]=end
+            dlg.update_progress(end,total)
+            if end<total:
+                self.after(1,add_batch)
+            else:
+                self._gen_btn.configure(text=f"✨  Generate ({len(self._all_paths)})")
+                self._update_progress()
+                dlg.finish()
+        self.after(10,add_batch)
+
+    def _make_blank_card(self,path):
+        """Add path to the queue and create its (empty) card right away —
+        metadata is filled in only once Generate is pressed."""
+        self._all_paths.append(path)
+        self._results[path]={"status":"waiting"}
+        if self._gen_empty_lbl.winfo_viewable():
+            self._gen_empty_lbl.grid_remove()
+        idx=len(self._result_cards)
+        r,c=idx//2,idx%2
+        card=MetaResultCard(self._gen_scroll,path,self._results[path],
+            on_redo=lambda p=path:self._redo_single(p),mode=self.current_mode,
+            request_thumb=self._request_thumb)
+        card.grid(row=r,column=c,sticky="ew",
+            padx=(4,2) if c==0 else (2,4),pady=(0,6))
+        self._result_cards.append(card)
+        self._card_by_path[path]=card
+        return card
 
     def _update_progress(self,done=None,total=None,msg=None):
         t=total or len(self._all_paths)
@@ -1816,6 +2022,7 @@ class App(DnDCTk):
         self.p_ok.configure(text=f"✓  {d} done")
         self.p_err.configure(text=f"✗  {failed} failed")
         self.p_pend.configure(text=f"○  {t-d-failed} pending")
+        self._gen_count_lbl.configure(text=f"Generated Metadata ({d})")
 
     def _clear_all(self,confirm=True):
         if self.ai_running: messagebox.showwarning("Busy","Stop generation first."); return
@@ -1823,7 +2030,6 @@ class App(DnDCTk):
             if not messagebox.askyesno("Clear","Remove all files and results?"): return
         self._all_paths.clear(); self._results.clear(); self._source_folder=""
         self._clear_results()
-        self._rebuild_thumb_grid()
         self._gen_btn.configure(text="✨  Generate (0)")
         self._update_progress()
 
@@ -1831,26 +2037,18 @@ class App(DnDCTk):
         for c in self._result_cards:
             try: c.destroy()
             except: pass
-        self._result_cards=[]
+        self._result_cards=[]; self._card_by_path={}
         self._gen_count_lbl.configure(text="Generated Metadata (0)")
         self._gen_empty_lbl.grid(row=0,column=0,columnspan=2,pady=40)
 
-    def _add_result_card(self,path):
-        if self._gen_empty_lbl.winfo_viewable():
-            self._gen_empty_lbl.grid_remove()
-        res=self._results.get(path,{})
-        idx=len(self._result_cards)
-        # 2-column grid layout
-        r,c=idx//2,idx%2
-        card=MetaResultCard(self._gen_scroll,path,res,
-            on_redo=lambda p=path:self._redo_single(p),mode=self.current_mode)
-        card.grid(row=r,column=c,sticky="ew",
-            padx=(4,2) if c==0 else (2,4),pady=(0,6))
-        self._result_cards.append(card)
-        done=sum(1 for r in self._results.values() if r.get("status")=="done")
-        self._gen_count_lbl.configure(text=f"Generated Metadata ({done})")
-        try: self._gen_scroll._parent_canvas.yview_moveto(1.0)
-        except: pass
+    def _update_card(self,path):
+        """Refresh (or, as a defensive fallback, create) the card for path
+        from self._results — this is how generation results reach the UI
+        now, instead of destroying/recreating cards every time."""
+        card=self._card_by_path.get(path)
+        if card is None:
+            card=self._make_blank_card(path)
+        card.apply_result(self._results.get(path,{}))
 
     # ── Pause / Stop ───────────────────────────────────────────────
     def _pause_ai(self):
@@ -1871,7 +2069,9 @@ class App(DnDCTk):
         if self.ai_running: return
         failed=[p for p in self._all_paths if self._results.get(p,{}).get("status")=="failed"]
         if not failed: return
-        for p in failed: self._results[p]={"status":"waiting"}
+        for p in failed:
+            self._results[p]={"status":"waiting"}
+            if p in self._card_by_path: self._card_by_path[p].set_waiting()
         try: self._retry_btn.pack_forget()
         except: pass
         self.start_generate()
@@ -1891,7 +2091,6 @@ class App(DnDCTk):
         targets=[p for p in self._all_paths
                  if self._results.get(p,{}).get("status") in ("waiting","failed")]
         for p in targets: self._results[p]={"status":"waiting"}
-        self._rebuild_thumb_grid()
         threading.Thread(target=self._gen_thread,args=(targets,),daemon=True).start()
 
     def _gen_thread(self,targets):
@@ -1927,6 +2126,7 @@ class App(DnDCTk):
                 if self.ai_stop_flag: return
                 fname=os.path.basename(path)
                 self._results[path]={"status":"working"}
+                self.after(0,lambda p=path:self._update_card(p))
                 self.after(0,lambda f=fname,n=i+1,t=total:
                     self._update_progress(done=done_count,total=t,
                         msg=f"⟳  [{n}/{t}] {f}"))
@@ -1959,11 +2159,10 @@ class App(DnDCTk):
                         self._results[path]={"status":"done",
                             "prompt":raw.strip(),"model_used":model_used}
                     with lock: done_count+=1
-                    self.after(0,lambda p=path:(
-                        self._add_result_card(p),self._rebuild_thumb_grid()))
+                    self.after(0,lambda p=path:self._update_card(p))
                 except Exception as e:
                     self._results[path]={"status":"failed","error":str(e)[:120]}
-                    self.after(0,self._rebuild_thumb_grid)
+                    self.after(0,lambda p=path:self._update_card(p))
                 self.after(0,lambda n=done_count,t=total:
                     self._update_progress(done=n,total=t))
             finally:
@@ -1996,7 +2195,6 @@ class App(DnDCTk):
         self.set_status(f"● Done — {done} generated · {failed} failed",
                         GRN if failed==0 else AMB_BTN)
         self._update_progress(done=done,total=total)
-        self._rebuild_thumb_grid()
         # Auto-save CSV
         if done>0: self._auto_save_csv()
 
@@ -2024,18 +2222,8 @@ class App(DnDCTk):
 
     def _redo_single(self,path):
         if self.ai_running: return
-        # Remove old card
-        for i,c in enumerate(self._result_cards):
-            if c.path==path:
-                c.destroy(); self._result_cards.pop(i); break
-        # Re-grid remaining cards
-        for i,c in enumerate(self._result_cards):
-            r,col=i//2,i%2
-            c.grid(row=r,column=col,sticky="ew",
-                padx=(4,2) if col==0 else (2,4),pady=(0,6))
-        if not self._result_cards:
-            self._gen_empty_lbl.grid(row=0,column=0,columnspan=2,pady=40)
         self._results[path]={"status":"waiting"}
+        if path in self._card_by_path: self._card_by_path[path].set_waiting()
         self.ai_running=True; self.ai_stop_flag=False; self._ai_paused=False
         self._gen_btn.configure(state="disabled")
         self._pause_btn.pack(side="left",padx=(0,4),before=self._gen_btn)
@@ -2053,10 +2241,12 @@ class App(DnDCTk):
             mode=self.current_mode
             fields=["Filename","Title","Description","Keywords"] if mode=="meta" else ["Filename","Prompt"]
             def row_for(p):
-                # Read latest from card boxes if available
+                fn=os.path.basename(p)
+                # Read latest from card boxes if available (user may have hand-edited them)
+                r=None
                 for card in self._result_cards:
-                    if card.path==p: return card.get_result()
-                r=self._results[p]; fn=os.path.basename(p)
+                    if card.path==p: r=card.get_result(); break
+                if r is None: r=self._results.get(p,{})
                 if mode=="meta":
                     return {"Filename":fn,"Title":r.get("title",""),
                             "Description":r.get("desc",""),"Keywords":r.get("kw","")}
