@@ -457,6 +457,8 @@ def build_meta_prompt(title_c, desc_c, kw_n, custom_prompt="",
 
     prefix_note = f' Start the title with: "{prefix}".' if prefix else ""
     suffix_note = f' End the title with: "{suffix_title}".' if suffix_title else ""
+    title_words_lo = max((title_c-20)//6, 6)
+    title_words_hi = max(title_c//5, title_words_lo+2)
 
     # Key change: we put KEYWORDS FIRST in the format so models don't
     # run out of context/tokens before generating them.
@@ -468,7 +470,12 @@ def build_meta_prompt(title_c, desc_c, kw_n, custom_prompt="",
         f"DESCRIPTION: <description>\n"
         f"KEYWORDS: <keywords>\n\n"
         f"STRICT REQUIREMENTS — every single one must be satisfied:\n"
-        f"1. TITLE: {max(title_c-20,10)}–{title_c} characters.{prefix_note}{suffix_note}\n"
+        f"1. TITLE: Write a LONG, fully-detailed, keyword-rich title of "
+        f"{max(title_c-20,10)}–{title_c} characters (roughly {title_words_lo}–{title_words_hi} words). "
+        f"This is for a stock photo search listing — a short, generic, or vague title hurts "
+        f"discoverability, so use as much of the allowed length as you can. Describe the "
+        f"subject, action, setting, mood AND style in one flowing descriptive sentence — do "
+        f"NOT just name the subject in a few words.{prefix_note}{suffix_note}\n"
         f"2. DESCRIPTION: {max(desc_c-30,20)}–{desc_c} characters. Include subject, "
         f"mood, setting, use-case, colors.\n"
         f"3. KEYWORDS: Write EXACTLY {kw_n} keywords separated by commas. "
@@ -883,14 +890,14 @@ class EmbedWindow(ctk.CTkToplevel):
         self.csv_status=ctk.CTkLabel(r1,text="No CSV loaded",
             font=ctk.CTkFont("Segoe UI",10),text_color=TXT3,fg_color=BG3,
             corner_radius=8,padx=8,pady=2)
-        self.csv_status.pack(side="left",padx=(8,0))
+        self.csv_status.grid(row=1,column=0,columnspan=3,sticky="w",padx=10,pady=(0,10))
 
         # 2. Folder row
         r2=self._section(body,"2","Image Folder",self._browse_folder,1)
         self.folder_status=ctk.CTkLabel(r2,text="No folder selected",
             font=ctk.CTkFont("Segoe UI",10),text_color=TXT3,fg_color=BG3,
             corner_radius=8,padx=8,pady=2)
-        self.folder_status.pack(side="left",padx=(8,0))
+        self.folder_status.grid(row=1,column=0,columnspan=3,sticky="w",padx=10,pady=(0,10))
 
         # Column map (compact 2x2)
         cmap=ctk.CTkFrame(body,fg_color=GLASS,corner_radius=10,border_width=1,border_color=GLASS_BDR)
@@ -1326,7 +1333,7 @@ else:
 #  MAIN APP
 # ══════════════════════════════════════════════════════════════════════
 class App(DnDCTk):
-    VERSION="v1.3"
+    VERSION="v1.4"
 
     def __init__(self):
         super().__init__()
@@ -1683,9 +1690,9 @@ class App(DnDCTk):
             self._meta_sf.pack_forget()
             self._prompt_sf.pack(fill="x",before=self._sl_anchor)
         self._clear_results()
-        for p in self._all_paths:
+        for p in list(self._all_paths):
             self._results[p]={"status":"waiting"}
-            self._make_blank_card(p)
+            self._place_card_for(p)
 
     def _on_platform_scroll(self,event,direction=None):
         plats=list(PLATFORM_RULES.keys())
@@ -1818,7 +1825,8 @@ class App(DnDCTk):
 
         self._gen_btn=ctk.CTkButton(btn_f,text="✨  Generate (0)",width=165,height=32,
             font=ctk.CTkFont("Segoe UI",12,"bold"),
-            fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,corner_radius=8,
+            fg_color=GRN,hover_color=GRN_H,text_color=ABSOLUTE_BG,
+            text_color_disabled=ABSOLUTE_BG,corner_radius=8,
             command=self.start_generate)
         self._gen_btn.pack(side="left",padx=(0,5))
 
@@ -1994,6 +2002,12 @@ class App(DnDCTk):
         metadata is filled in only once Generate is pressed."""
         self._all_paths.append(path)
         self._results[path]={"status":"waiting"}
+        return self._place_card_for(path)
+
+    def _place_card_for(self,path):
+        """Create (or recreate) the card widget for a path already present
+        in self._all_paths/_results — does NOT touch _all_paths, so it's
+        safe to call while iterating over that list (e.g. on mode switch)."""
         if self._gen_empty_lbl.winfo_viewable():
             self._gen_empty_lbl.grid_remove()
         idx=len(self._result_cards)
@@ -2047,7 +2061,7 @@ class App(DnDCTk):
         now, instead of destroying/recreating cards every time."""
         card=self._card_by_path.get(path)
         if card is None:
-            card=self._make_blank_card(path)
+            card=self._place_card_for(path)
         card.apply_result(self._results.get(path,{}))
 
     # ── Pause / Stop ───────────────────────────────────────────────
@@ -2152,6 +2166,17 @@ class App(DnDCTk):
                         if len(title)>tc: title=title[:tc].rsplit(" ",1)[0].strip()
                         if single_kw: kw=enforce_single_keywords(kw)
                         if avoid_copyright: kw=_strip_copyright_keywords(kw)
+                        # HARD CAP the keyword count in code — the prompt asks
+                        # for an exact count, but not every provider/model
+                        # follows that instruction, so this guarantees the
+                        # microstock-site limit is respected regardless.
+                        kw_list=[k.strip() for k in kw.split(",") if k.strip()]
+                        seen=set(); deduped=[]
+                        for k in kw_list:
+                            lk=k.lower()
+                            if lk not in seen:
+                                seen.add(lk); deduped.append(k)
+                        kw=", ".join(deduped[:kn])
                         self._results[path]={
                             "status":"done","title":title,"desc":desc,
                             "kw":kw,"model_used":model_used}
